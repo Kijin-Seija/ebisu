@@ -1,0 +1,27 @@
+appId: local.ebisu.desktop
+productName: Ebisu
+electronDist: node_modules/electron/dist
+directories:
+  output: dist
+files:
+  - out/**
+  - package.json
+  - LICENSE
+  - README.md
+  - docs/**
+extraResources:
+  - from: resources
+    to: ebisu
+asarUnpack:
+  - node_modules/better-sqlite3/**
+mac:
+  icon: resources/icon.icns
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  category: public.app-category.developer-tools
+  identity: null
+dmg:
+  title: Ebisu

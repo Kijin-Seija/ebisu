@@ -1,0 +1,126 @@
+{
+  "repository": "https://github.com/shuaizenge/ai-girls",
+  "commit": "dcd69f5f4f2dff1a9c0031e82deb49e0fe949c76",
+  "retrievedOn": "2026-10-22",
+  "models": {
+    "gpt": {
+      "file": "model-gpt.webp",
+      "source": "https://raw.githubusercontent.com/shuaizenge/ai-girls/dcd69f5f4f2dff1a9c0031e82deb49e0fe949c76/characters/gpt/chibi/zipzippipe-BV1tE9XBbErS-23s.png",
+      "sourceSha256": "90606f78f5c8ee76c3547c0df2999ba145cdb50bef25e7fc6a8a6c3ecc4ee4d5",
+      "author": "ZipZipPipe",
+      "originalCharacterAuthor": null,
+      "work": "https://www.bilibili.com/video/BV1tE9XBbErS/",
+      "timeSeconds": 23,
+      "modifications": "裁切为头像，缩放并转换为 WebP",
+      "crop": [
+        120,
+        80,
+        600,
+        560
+      ],
+      "license": "作者声明开放分享与再创作；无统一标准许可证"
+    },
+    "claude": {
+      "file": "model-claude.webp",
+      "source": "https://raw.githubusercontent.com/shuaizenge/ai-girls/dcd69f5f4f2dff1a9c0031e82deb49e0fe949c76/characters/claude/chibi/zipzippipe-BV1tE9XBbErS-17s.png",
+      "sourceSha256": "331eb459d81c0a2f908fccaf8365f137a77098f81f1e145cca5413a1def07c55",
+      "author": "ZipZipPipe",
+      "originalCharacterAuthor": null,
+      "work": "https://www.bilibili.com/video/BV1tE9XBbErS/",
+      "timeSeconds": 17,
+      "modifications": "裁切为头像，缩放并转换为 WebP",
+      "crop": [
+        150,
+        80,
+        550,
+        480
+      ],
+      "license": "作者声明开放分享与再创作；无统一标准许可证"
+    },
+    "deepseek": {
+      "file": "model-deepseek.webp",
+      "source": "https://raw.githubusercontent.com/shuaizenge/ai-girls/dcd69f5f4f2dff1a9c0031e82deb49e0fe949c76/characters/deepseek/chibi/zipzippipe-BV1tE9XBbErS-05s.png",
+      "sourceSha256": "cbcd4b58b2115b8dbc7ece8271026841928be7ac594705693357ade8e8baacef",
+      "author": "ZipZipPipe",
+      "originalCharacterAuthor": "上善无形",
+      "work": "https://www.bilibili.com/video/BV1tE9XBbErS/",
+      "timeSeconds": 5,
+      "modifications": "裁切为头像，缩放并转换为 WebP",
+      "crop": [
+        140,
+        130,
+        620,
+        610
+      ],
+      "license": "CC BY-NC-SA 4.0"
+    },
+    "kimi": {
+      "file": "model-kimi.webp",
+      "source": "https://raw.githubusercontent.com/shuaizenge/ai-girls/dcd69f5f4f2dff1a9c0031e82deb49e0fe949c76/characters/kimi/chibi/zipzippipe-BV1tE9XBbErS-41s.png",
+      "sourceSha256": "bc9d61f6365e97e679dda15c59b9c8d78193b19ef379f6e1efaaad743b6f84f3",
+      "author": "ZipZipPipe",
+      "originalCharacterAuthor": null,
+      "work": "https://www.bilibili.com/video/BV1tE9XBbErS/",
+      "timeSeconds": 41,
+      "modifications": "裁切为头像，缩放并转换为 WebP",
+      "crop": [
+        160,
+        110,
+        600,
+        550
+      ],
+      "license": "作者声明开放分享与再创作；无统一标准许可证"
+    },
+    "qwen": {
+      "file": "model-qwen.webp",
+      "source": "https://raw.githubusercontent.com/shuaizenge/ai-girls/dcd69f5f4f2dff1a9c0031e82deb49e0fe949c76/characters/qwen/chibi/zipzippipe-BV1tE9XBbErS-53s.png",
+      "sourceSha256": "4f59aee4d8d4fa341a40b68f33d9593708f7eecfcb19c96ad8aa44d9bb844cb9",
+      "author": "ZipZipPipe",
+      "originalCharacterAuthor": null,
+      "work": "https://www.bilibili.com/video/BV1tE9XBbErS/",
+      "timeSeconds": 53,
+      "modifications": "裁切为头像，缩放并转换为 WebP",
+      "crop": [
+        150,
+        80,
+        590,
+        520
+      ],
+      "license": "作者声明开放分享与再创作；无统一标准许可证"
+    },
+    "gemini": {
+      "file": "model-gemini.webp",
+      "source": "https://raw.githubusercontent.com/shuaizenge/ai-girls/dcd69f5f4f2dff1a9c0031e82deb49e0fe949c76/characters/gemini/chibi/zipzippipe-BV1tE9XBbErS-11s.png",
+      "sourceSha256": "d496c4edf07b964e18cce99b007c913237c9d44d1c8088fb84ea83e1972d1364",
+      "author": "ZipZipPipe",
+      "originalCharacterAuthor": null,
+      "work": "https://www.bilibili.com/video/BV1tE9XBbErS/",
+      "timeSeconds": 11,
+      "modifications": "裁切为头像，缩放并转换为 WebP",
+      "crop": [
+        120,
+        100,
+        600,
+        580
+      ],
+      "license": "作者声明开放分享与再创作；无统一标准许可证"
+    },
+    "grok": {
+      "file": "model-grok.webp",
+      "source": "https://raw.githubusercontent.com/shuaizenge/ai-girls/dcd69f5f4f2dff1a9c0031e82deb49e0fe949c76/characters/grok/chibi/zipzippipe-BV1tE9XBbErS-29s.png",
+      "sourceSha256": "2f311320ca878e084ae031b65fbb697d3eb296f4091050a71c33797b78f30235",
+      "author": "ZipZipPipe",
+      "originalCharacterAuthor": null,
+      "work": "https://www.bilibili.com/video/BV1tE9XBbErS/",
+      "timeSeconds": 29,
+      "modifications": "裁切为头像，缩放并转换为 WebP",
+      "crop": [
+        240,
+        160,
+        720,
+        640
+      ],
+      "license": "作者声明开放分享与再创作；无统一标准许可证"
+    }
+  }
+}

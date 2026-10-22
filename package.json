@@ -1,0 +1,51 @@
+{
+  "name": "ebisu",
+  "version": "0.1.0",
+  "description": "本地项目与 Agent 会话状态面板",
+  "main": "out/main/index.js",
+  "author": "Ebisu",
+  "license": "MIT",
+  "scripts": {
+    "format": "prettier --write src tests scripts/*.cjs resources/integration/report.cjs *.json *.ts *.yml",
+    "dev": "electron-vite dev --watch",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "test": "node scripts/test.cjs",
+    "test:smoke": "node scripts/electron-smoke.cjs",
+    "rebuild": "electron-builder install-app-deps",
+    "package:mac": "pnpm build && electron-builder --mac --arm64",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@iarna/toml": "^2.2.5",
+    "better-sqlite3": "^12.4.1",
+    "chokidar": "^4.0.3",
+    "lucide-vue-next": "^0.468.0",
+    "naive-ui": "^2.43.1",
+    "pinia": "^3.0.3",
+    "vue": "^3.5.22",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.9.1",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.1",
+    "playwright": "^1.56.1",
+    "prettier": "3.6.2",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^3.1.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}
