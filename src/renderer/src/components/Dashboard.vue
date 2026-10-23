@@ -13,8 +13,8 @@ import {
 } from 'naive-ui'
 import { Folder, FolderPlus, GitBranch, MoreHorizontal, CircleCheck } from 'lucide-vue-next'
 import { useDashboard } from '../store'
-import { avatarUrl } from '../avatars'
-import type { FolderView } from '../../../shared/types'
+import { backgroundUrl, modelFamily, trayBackgroundUrl } from '../avatars'
+import type { FolderView, SessionActivity } from '../../../shared/types'
 import SessionAvatars from './SessionAvatars.vue'
 
 const props = defineProps<{ trayMode?: boolean; dark?: boolean }>()
@@ -28,9 +28,15 @@ const themeVars = useThemeVars()
 const activityColors = computed(() => ({
   idle: props.dark ? themeVars.value.successColorSuppl : themeVars.value.successColor,
   executing: props.dark ? themeVars.value.infoColorSuppl : themeVars.value.infoColor,
-  waiting: props.dark ? themeVars.value.warningColorSuppl : themeVars.value.warningColor
+  waiting: props.dark ? themeVars.value.warningColorSuppl : themeVars.value.warningColor,
+  error: props.dark ? themeVars.value.errorColorSuppl : themeVars.value.errorColor
 }))
-const activityLabels = { idle: '空闲可用', executing: '正在协作', waiting: '需要处理' }
+const activityLabels = {
+  idle: '空闲可用',
+  executing: '正在协作',
+  waiting: '需要处理',
+  error: '出现故障'
+}
 const filter = ref<'all' | 'busy' | 'idle'>('all')
 const renaming = ref<FolderView | null>(null)
 const newName = ref('')
@@ -57,9 +63,10 @@ const sessionCount = computed(
       )
     ).size
 )
-/** 聚合全部会话（包含 +x 内的会话）；任一等待输入时，卡片优先提示需要处理。 */
-function activityState(folder: FolderView): 'idle' | 'executing' | 'waiting' {
+/** 聚合全部会话（包含 +x 内的会话）；故障优先于等待，等待优先于执行。 */
+function activityState(folder: FolderView): 'idle' | 'executing' | 'waiting' | 'error' {
   if (!folder.sessions.length) return 'idle'
+  if (folder.sessions.some((session) => session.phase === 'error')) return 'error'
   return folder.sessions.some((session) => session.phase === 'waiting') ? 'waiting' : 'executing'
 }
 
@@ -70,12 +77,43 @@ const folders = computed(() => {
         filter.value === 'all' ||
         (filter.value === 'busy' ? folder.sessions.length > 0 : folder.sessions.length === 0)
     )
-    .map((folder) => ({ ...folder, activityState: activityState(folder) }))
+    .map((folder) => ({
+      ...folder,
+      activityState: activityState(folder),
+      // 背景只展示有角色形象的模型；未知模型的会话不参与背景堆叠。
+      backgroundSessions: folder.sessions.filter((session) => modelFamily(session.model))
+    }))
   // 全部项目中优先展示协作目录（含等待输入）；稳定排序保留同组原有顺序，不修改快照。
   return filter.value === 'all'
     ? filtered.sort((a, b) => Number(b.sessions.length > 0) - Number(a.sessions.length > 0))
     : filtered
 })
+
+/** 托盘与主窗口共用卡片结构，只在这里切换背景素材版本。 */
+function cardBackgroundUrl(session: SessionActivity): string | undefined {
+  return props.trayMode
+    ? trayBackgroundUrl(session, dashboard.revision)
+    : backgroundUrl(session, dashboard.revision)
+}
+
+/**
+ * 水平线以下部分占托盘素材高度的比例，用于把各模型的搁板统一对齐卡片底端。
+ * 数值必须与 scripts/make-tray-avatars.py 中的 LINE_RATIOS 保持一致。
+ */
+const trayLineDrops: Record<string, number> = {
+  gpt: 0.078125,
+  claude: 0.078125,
+  deepseek: 0.06640625,
+  kimi: 0.076171875,
+  qwen: 0.134765625,
+  gemini: 0.06640625,
+  grok: 0.07421875
+}
+
+function trayBackgroundDrop(session: SessionActivity): number | undefined {
+  const family = modelFamily(session.model)
+  return family ? trayLineDrops[family] : undefined
+}
 
 async function action(operation: () => Promise<unknown>): Promise<void> {
   try {
@@ -163,14 +201,19 @@ const menu = [
       :style="{ '--activity-color': activityColors[folder.activityState] }"
     >
       <!-- 透明人物轮廓依次遮挡，空白区域透出旧人物；合成后再统一淡化，避免身体部分混色。 -->
-      <div v-if="folder.sessions.length" class="card-avatar-background" aria-hidden="true">
+      <div
+        v-if="folder.backgroundSessions.length"
+        class="card-avatar-background"
+        aria-hidden="true"
+      >
         <img
-          v-for="(session, index) in folder.sessions"
+          v-for="(session, index) in folder.backgroundSessions"
           :key="`${session.terminal}:${session.sessionId}`"
           class="card-avatar-background-image"
-          :src="avatarUrl(session, dashboard.revision, true)"
+          :src="cardBackgroundUrl(session)"
           :style="{
-            '--avatar-shift': folder.sessions.length - 1 - index
+            '--avatar-shift': folder.backgroundSessions.length - 1 - index,
+            '--background-avatar-drop': trayBackgroundDrop(session)
           }"
           alt=""
           draggable="false"
@@ -243,7 +286,7 @@ const menu = [
           </template>
         </div>
         <div v-else class="plain-folder">普通文件夹</div>
-        <div class="occupancy">
+        <div v-if="!trayMode" class="occupancy">
           <span class="status-dot"></span>
           {{ activityLabels[folder.activityState] }}
         </div>

@@ -20,8 +20,11 @@ const visibleCount = computed(() => {
 })
 const visible = computed(() => props.sessions.slice(0, visibleCount.value))
 const hidden = computed(() => props.sessions.slice(visibleCount.value))
-/** +x 仅汇总被它折叠的会话，已直接展示的等待状态由各自 badge 提示。 */
-const hiddenWaiting = computed(() => hidden.value.some((session) => session.phase === 'waiting'))
+/** +x 仅汇总被它折叠的会话；故障优先于等待，已直接展示的状态由各自 badge 提示。 */
+const hiddenStatus = computed(() => {
+  if (hidden.value.some((session) => session.phase === 'error')) return 'error'
+  return hidden.value.some((session) => session.phase === 'waiting') ? 'waiting' : null
+})
 // Teleport 后的气泡不继承卡片上的变量，因此头像尺寸在两个容器中都显式提供。
 const avatarStyle = {
   '--session-avatar-size': `${avatarSize}px`,
@@ -57,9 +60,9 @@ onBeforeUnmount(() => observer?.disconnect())
       <template #trigger>
         <n-badge
           class="session-status-badge session-group-badge"
-          :show="hiddenWaiting"
-          type="warning"
-          value="!"
+          :show="hiddenStatus !== null"
+          :type="hiddenStatus === 'error' ? 'error' : 'warning'"
+          :value="hiddenStatus === 'error' ? '!' : '?'"
           :offset="[-4, 2]"
           processing
         >

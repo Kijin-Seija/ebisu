@@ -12,6 +12,8 @@ const names = {
   grok: 'Grok',
   qoder: 'Qoder'
 }
+const phaseTypes = { executing: 'info', waiting: 'warning', error: 'error' } as const
+const phaseLabels = { executing: '执行中', waiting: '问题待确认', error: '出现故障' } as const
 
 /** 详情里始终展示完整 ID；复制失败就地反馈，不提供任何会话控制操作。 */
 async function copyId(id: string): Promise<void> {
@@ -28,12 +30,8 @@ async function copyId(id: string): Promise<void> {
   <div class="session-details detail-panel">
     <div class="detail-session-heading">
       <strong>{{ names[session.terminal] }}</strong>
-      <n-tag
-        size="small"
-        :bordered="false"
-        :type="session.phase === 'waiting' ? 'warning' : 'info'"
-      >
-        {{ session.phase === 'waiting' ? '问题待确认' : '执行中' }}
+      <n-tag size="small" :bordered="false" :type="phaseTypes[session.phase]">
+        {{ phaseLabels[session.phase] }}
       </n-tag>
     </div>
     <div class="detail-field session-task">

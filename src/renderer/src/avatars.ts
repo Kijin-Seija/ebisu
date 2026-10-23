@@ -11,8 +11,21 @@ export function modelFamily(model: string | null): ModelFamily | undefined {
   return undefined
 }
 
-/** 背景使用同一身份对应的透明轮廓素材；普通头像继续使用原始裁切图。 */
-export function avatarUrl(session: SessionActivity, revision: number, background = false): string {
+/** 会话头像固定使用终端商标；模型角色只用于卡片背景。 */
+export function avatarUrl(session: SessionActivity, revision: number): string {
+  return `ebisu-asset://avatar/terminal/${session.terminal}?v=${revision}`
+}
+
+/** 只有识别到模型角色时才提供透明轮廓背景；未知模型不渲染装饰层。 */
+export function backgroundUrl(session: SessionActivity, revision: number): string | undefined {
   const family = modelFamily(session.model)
-  return `ebisu-asset://avatar/${family ? `model/${family}` : `terminal/${session.terminal}`}?v=${revision}${background ? '&background=1' : ''}`
+  return family ? `ebisu-asset://avatar/model/${family}?v=${revision}&background=1` : undefined
+}
+
+/** 托盘使用 Q 版角色单独一版背景，主窗口继续使用原透明轮廓。 */
+export function trayBackgroundUrl(session: SessionActivity, revision: number): string | undefined {
+  const family = modelFamily(session.model)
+  return family
+    ? `ebisu-asset://avatar/model/${family}?v=${revision}&background=1&tray=1`
+    : undefined
 }

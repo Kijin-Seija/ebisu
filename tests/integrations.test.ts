@@ -370,6 +370,23 @@ it('五种终端完成真实 wrapper→HTTP→SQLite 通知链路；检查不伪
     ).toBeUndefined()
   }
 })
+it('StopFailure 上报故障并在 Stop、租约过期后保留，同项目下一次执行时清除', async () => {
+  const folder = store.addFolder(root)
+  integrations.prepareBridge()
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  await report('claude', { hook_event_name: 'UserPromptSubmit', session_id: 'failed', cwd: root })
+  expect(store.sessions(folder.id)).toMatchObject([{ sessionId: 'failed', phase: 'executing' }])
+  await report('claude', { hook_event_name: 'StopFailure', session_id: 'failed', cwd: root })
+  expect(store.sessions(folder.id)).toMatchObject([{ sessionId: 'failed', phase: 'error' }])
+  // Stop 只释放占用，不清理故障；租约也不会让故障过期。
+  await report('claude', { hook_event_name: 'Stop', session_id: 'failed', cwd: root })
+  expect(store.sessions(folder.id)).toMatchObject([{ sessionId: 'failed', phase: 'error' }])
+  store.expire(Date.now() + 60 * 60 * 1000)
+  expect(store.sessions(folder.id)).toMatchObject([{ sessionId: 'failed', phase: 'error' }])
+  // 同项目的下一次执行请求（即使来自其他会话）清除项目内全部故障。
+  await report('claude', { hook_event_name: 'PreToolUse', session_id: 'resumed', cwd: root })
+  expect(store.sessions(folder.id)).toMatchObject([{ sessionId: 'resumed', phase: 'executing' }])
+})
 it('Grok 兼容加载 Claude hook 时不会伪造 Claude 会话', async () => {
   const folder = store.addFolder(root)
   integrations.prepareBridge()

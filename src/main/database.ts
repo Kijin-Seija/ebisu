@@ -220,6 +220,8 @@ export class Store {
             : []
       ) as ActivityRow[]
       let changed = false
+      // 只有本目录真正接受了这次进入，才允许它清除项目内的故障记录。
+      let acceptedInFolder = false
       for (const row of rows) {
         if (
           request.sequence !== undefined &&
@@ -227,12 +229,11 @@ export class Store {
           request.sequence <= row.sequence
         )
           continue
-        // Stop 是软结束：提问或权限等待状态不应被该事件覆盖。
+        // Stop 是软结束：等待状态不被覆盖；故障只能由同项目的 executing 请求清除。
         const preserve =
           request.action === 'exit' &&
-          request.preserveWaiting &&
-          row.phase === 'waiting' &&
-          row.active === 1
+          row.active === 1 &&
+          (row.phase === 'error' || (request.preserveWaiting && row.phase === 'waiting'))
         const active = request.action === 'exit' && !preserve ? 0 : 1
         if (
           request.action === 'enter' &&
@@ -241,7 +242,14 @@ export class Store {
           folder?.id !== row.folderId
         )
           continue
-        const phase = request.action === 'enter' ? (request.phase ?? 'executing') : row.phase
+        const incoming = request.phase ?? 'executing'
+        // 故障状态具有粘性：waiting 或重复的 error 上报不能将其降级。
+        const phase =
+          request.action === 'enter'
+            ? row.active === 1 && row.phase === 'error' && incoming !== 'executing'
+              ? 'error'
+              : incoming
+            : row.phase
         this.db
           .prepare(
             `UPDATE activities SET active=?,phase=?,model=?,taskTitle=?,lastSeen=?,startedAt=?,sequence=?
@@ -260,6 +268,7 @@ export class Store {
             request.sessionId
           )
         changed = true
+        if (row.folderId === folder?.id) acceptedInFolder = true
       }
       if (
         folder &&
@@ -284,6 +293,19 @@ export class Store {
             1,
             request.sequence ?? null
           )
+        changed = true
+        acceptedInFolder = true
+      }
+      // 同项目出现新的执行请求后，其他会话遗留的故障记录一并释放。
+      if (
+        folder &&
+        acceptedInFolder &&
+        request.action === 'enter' &&
+        (request.phase ?? 'executing') === 'executing'
+      ) {
+        this.db
+          .prepare("UPDATE activities SET active=0 WHERE folderId=? AND phase='error' AND active=1")
+          .run(folder.id)
         changed = true
       }
       if (
@@ -325,17 +347,19 @@ export class Store {
       )
       .all(folderId) as SessionActivity[]
   }
-  /** 仅解除面板占用；不会终止宿主 agent，后续新心跳可以重新进入。 */
+  /** 仅解除面板占用；不会终止宿主 agent，故障只能由同项目后续的执行中请求清除。 */
   clearSession(folderId: string, terminal: TerminalId, sessionId: string): void {
     this.db
-      .prepare('UPDATE activities SET active=0 WHERE folderId=? AND terminal=? AND sessionId=?')
+      .prepare(
+        "UPDATE activities SET active=0 WHERE folderId=? AND terminal=? AND sessionId=? AND phase<>'error'"
+      )
       .run(folderId, terminal, sessionId)
   }
-  /** 返回是否发生状态变化，供主进程决定是否广播刷新事件。 */
+  /** 返回是否发生状态变化，供主进程决定是否广播刷新事件。故障不参与租约过期。 */
   expire(at = this.now()): boolean {
     return (
       this.db
-        .prepare('UPDATE activities SET active=0 WHERE active=1 AND lastSeen<=?')
+        .prepare("UPDATE activities SET active=0 WHERE active=1 AND phase<>'error' AND lastSeen<=?")
         .run(at - LEASE_MS).changes > 0
     )
   }

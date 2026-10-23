@@ -237,7 +237,7 @@ async function main() {
     ownBridges.some(
       (bridge) => value.includes(bridge) || value.includes(`'${bridge.replaceAll("'", "'\\''")}'`)
     )
-  // 主动通知也是一次 agent 工具调用；其 PostToolUse 不能覆盖刚上报的 waiting/exit。
+  // 主动通知也是一次 agent 工具调用；其 PostToolUse 不能覆盖刚上报的 waiting/error/exit。
   // 包括 Bash command 和 Codex 编排工具的 code 字段，只检查实际字符串参数。
   if (
     args.hook &&
@@ -266,7 +266,11 @@ async function main() {
   let preserveWaiting = false
   if (args.hook) {
     if (event === 'sessionstart') return
-    if (['stop', 'sessionend', 'interrupt', 'stopcancelled', 'stopfailure'].includes(event)) {
+    if (event === 'stopfailure') {
+      // 失败会话保留故障标记，直到宿主在该项目重新上报执行中。
+      phase = 'error'
+      scope = 'session'
+    } else if (['stop', 'sessionend', 'interrupt', 'stopcancelled'].includes(event)) {
       action = 'exit'
       scope = 'session'
       preserveWaiting = event === 'stop'

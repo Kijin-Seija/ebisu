@@ -9,10 +9,16 @@
 固定来源提交、每张原图 URL、SHA-256、时间位置和裁切范围见 `sources.json`。
 上游完整署名说明保存在 `UPSTREAM-NOTICE.md`。
 
-`backgrounds/model-*.png` 是用于卡片装饰的透明轮廓衍生图，沿用上述来源、作者和许可。
+`backgrounds/model-*.png` 是用于主窗口卡片装饰的透明轮廓衍生图，沿用上述来源、作者和许可。
 通过 `python3 scripts/make-avatar-backgrounds.py`（依赖 Pillow）从本地 WebP 生成：
 移除与画面边缘连通的浅色底色，保留人物主体并柔化边缘。原始小头像不受影响。
 自定义头像若用于轮廓叠放，建议选择带透明背景的 PNG/WebP；程序不会猜测任意照片的主体。
+
+`q-version/model-*.webp` 是基于上述角色形象生成的 Q 版托盘素材，`tray/model-*.png`
+是水平线以下桌面白底已抠除、仅保留手与装饰的透明衍生图，供托盘卡片底部溢出显示。通过
+`python3 scripts/make-tray-avatars.py`（依赖 Pillow）生成；主窗口不使用这些文件。
+Q 版素材仍属于上述角色形象的衍生作品，沿用原作者署名与相应用许可条件，
+不代表模型厂商官方角色。
 
 DeepSeek 形象原始创作者为上善无形，女仆二次设计为 ZipZipPipe。
 其头像和裁切衍生图依 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)

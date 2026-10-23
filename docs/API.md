@@ -11,18 +11,18 @@
 
 ## 活动请求
 
-| 字段 | 类型 | 语义 |
-| --- | --- | --- |
-| path | string，必填 | 现存文件夹绝对路径；显示名称不参与匹配 |
-| terminal | string，必填 | codex / workbuddy / claude / grok / qoder |
-| sessionId | string，必填 | 同一宿主终端中的稳定会话标识，最长 512 字符 |
-| action | enter / exit，必填 | 进入或刷新 / 退出 |
-| phase | executing / waiting | enter 时生效，默认 executing |
-| model | string | 已确认的当前模型，最长 256 字符；省略时保留已有模型信息 |
-| taskTitle | string | 终端已生成的真实任务/会话标题，去除首尾空白后为 1–512 字符；省略时保留已有标题 |
-| scope | folder / session | 默认 folder；session 对该终端、会话的关联活动统一更新或退出 |
-| preserveWaiting | boolean | 仅软退出使用：保留未过期 waiting，不延长其心跳 |
-| sequence | 非负整数 | 可选递增序号，抵御迟到或重复的旧事件；不用于服务端租约计时 |
+| 字段            | 类型                        | 语义                                                                           |
+| --------------- | --------------------------- | ------------------------------------------------------------------------------ |
+| path            | string，必填                | 现存文件夹绝对路径；显示名称不参与匹配                                         |
+| terminal        | string，必填                | codex / workbuddy / claude / grok / qoder                                      |
+| sessionId       | string，必填                | 同一宿主终端中的稳定会话标识，最长 512 字符                                    |
+| action          | enter / exit，必填          | 进入或刷新 / 退出                                                              |
+| phase           | executing / waiting / error | enter 时生效，默认 executing；error 表示网络、额度等无法继续的故障             |
+| model           | string                      | 已确认的当前模型，最长 256 字符；省略时保留已有模型信息                        |
+| taskTitle       | string                      | 终端已生成的真实任务/会话标题，去除首尾空白后为 1–512 字符；省略时保留已有标题 |
+| scope           | folder / session            | 默认 folder；session 对该终端、会话的关联活动统一更新或退出                    |
+| preserveWaiting | boolean                     | 仅软退出使用：保留未过期 waiting，不延长其心跳                                 |
+| sequence        | 非负整数                    | 可选递增序号，抵御迟到或重复的旧事件；不用于服务端租约计时                     |
 
 每个 `(目录, 终端, 会话 ID)` 最多一条活跃记录。目录先 realpath，再按路径边界匹配最深注册目录；不同 Git worktree 不合并。
 
@@ -35,18 +35,20 @@
 
 ## 生命周期
 
-- UserPromptSubmit、PreToolUse、PostToolUse：进入或刷新 executing，继续工作时清除 waiting。
-- PermissionRequest、Elicitation，以及询问工具的 PreToolUse：进入 waiting。
+- UserPromptSubmit、PreToolUse、PostToolUse：进入或刷新 executing，继续工作时清除 waiting 和该项目的 error。
+- PermissionRequest、Elicitation，以及询问工具的 PreToolUse：进入 waiting；waiting 不会覆盖已有 error。
 - 受支持的权限或询问 Notification：进入 waiting；不把普通 idle 通知当作问题。
 - ElicitationResult：恢复 executing。
 - Stop：`exit + scope:session + preserveWaiting:true`；普通完成释放，已标为等待的会话保留。
-- SessionEnd、Interrupt、StopCancelled、StopFailure：强制退出本会话。
-- 普通文本提问和跨目录工作：由全局规则及 skill 主动补报。
+- SessionEnd、Interrupt、StopCancelled：强制退出本会话，但不清除 error。
+- StopFailure：进入 error；故障状态不随 exit、重启或租约过期消失。
+- 同一目录收到任意新的 executing enter 时，清除该目录下所有会话的 error；其他目录不受影响。
+- 普通文本提问、跨目录工作及故障：由全局规则及 skill 主动补报。
 
-通知桥跳过“执行自身通知命令”对应的工具前后事件，避免主动上报 waiting 或 exit 后被该命令的 PostToolUse 立刻覆盖。
+通知桥跳过“执行自身通知命令”对应的工具前后事件，避免主动上报 waiting、error 或 exit 后被该命令的 PostToolUse 立刻覆盖。
 
 工具事件只覆盖实际提供的 cwd 与结构化文件/目录参数。不解析任意 shell 命令来猜测目录；涉及其他目录的工具或任务由 skill 显式上报。
-长时间没有事件的命令或思考期间仍依赖会话按规则刷新；超过十分钟没有请求即过期，不能保证捕获不遵守规则的执行。
+长时间没有事件的命令或思考期间仍依赖会话按规则刷新；executing 与 waiting 超过十分钟没有请求即过期，error 不参与租约过期，只能由同项目的 executing 请求清除。因此仍不能保证捕获不遵守规则的执行。
 
 原生事件存在真实 session ID 时优先使用；没有 ID 的显式 skill 通知应先用 `--new-session` 生成并保留 ID。
 任务标题可用 `--task-title '真实标题'` 上报；hook 读取 `task_title/taskTitle/session_title/sessionTitle`，不将工具标题或提示词当作会话名称。

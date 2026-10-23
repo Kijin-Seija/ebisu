@@ -2,7 +2,8 @@
 export const terminalIds = ['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const
 export type TerminalId = (typeof terminalIds)[number]
 export type ModelFamily = 'gpt' | 'claude' | 'deepseek' | 'kimi' | 'qwen' | 'gemini' | 'grok'
-export type ActivityPhase = 'executing' | 'waiting'
+export const activityPhases = ['executing', 'waiting', 'error'] as const
+export type ActivityPhase = (typeof activityPhases)[number]
 export type AvatarKey = `model:${ModelFamily}` | `terminal:${TerminalId}`
 /** 上报携带真实路径；sequence 用于抵御异步 hook 的迟到请求。 */
 export interface ActivityRequest {

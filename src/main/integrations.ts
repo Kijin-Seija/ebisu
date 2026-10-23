@@ -233,7 +233,8 @@ export class Integrations {
 需要获取上报 ID 时执行 ${command} --new-session；该命令优先返回宿主真实 ID，仅在确实缺失时生成 local- ID。只申请一次，保存并在本会话所有通知中用 --session 复用返回值，不要在不同会话之间共享，也不要将终端名或模型名用作会话 ID。已有 local- ID 时继续传入，原生工具 hook 会将该命令中的临时 ID 绑定到真实身份；不要自行换成另一个 ID。缺少 ID 的请求不会创建活动。
 在涉及其他目录前也执行 enter；执行中至少每两分钟重复 enter 刷新心跳，长时间命令前后也刷新。
 需要向用户提问或等待确认前，执行 enter 并加 --phase waiting；继续执行用 --phase executing。
-任务正常完成、取消或失败时执行 --action exit --scope session，释放此会话涉及的目录。
+遇到网络故障、额度上限等无法继续的问题时，执行 enter 并加 --phase error；该项目的故障状态会保留到下一次 executing 上报。
+任务正常完成或取消时执行 --action exit --scope session，释放此会话涉及的目录；故障状态不因退出而清除。
 上报工具失联时快速静默返回，不改变原任务，不自动启动 Ebisu。不要创建脱离会话持续运行的无限心跳进程。
 此规则只负责本机活动上报，不授权提交、推送、发消息等其他操作。若同时加载了其他终端的 Ebisu 规则，只使用实际宿主终端对应的命令，勿重复执行。
 ${end}`
@@ -269,7 +270,7 @@ ${end}`
     }
     try {
       const skillFile = path.join(this.home, adapter.skillRoot, `ebisu-${id}`, 'SKILL.md')
-      const skill = `---\nname: ebisu-${id}\ndescription: Notify the local Ebisu project dashboard when this ${terminalNames[id]} session reads, plans or works in a local folder; maintain activity and waiting state until the task finishes.\n---\n\n${this.ruleText(id)}\n`
+      const skill = `---\nname: ebisu-${id}\ndescription: Notify the local Ebisu project dashboard when this ${terminalNames[id]} session reads, plans or works in a local folder; maintain activity, waiting and error state until the task finishes.\n---\n\n${this.ruleText(id)}\n`
       const oldOwned = manifest?.owned.find((owned) => owned.file === skillFile)
       if (
         existsSync(skillFile) &&

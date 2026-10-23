@@ -168,7 +168,12 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
                   </div>
                   <Dashboard :tray-mode="trayMode" :dark="dark" />
                 </template>
-                <Settings v-else />
+                <template v-else>
+                  <div v-if="!trayMode" class="page-heading settings-heading">
+                    <h1>设置<span class="title-period">.</span></h1>
+                  </div>
+                  <Settings />
+                </template>
               </template>
             </section>
           </main>

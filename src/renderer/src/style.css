@@ -195,11 +195,13 @@ button:focus-visible {
   gap: 9px;
 }
 /* 标题仅保留页面名称和操作，项目数量归入下方各筛选标签。 */
-.project-heading {
+.project-heading,
+.settings-heading {
   flex-wrap: wrap;
   margin-bottom: 20px;
 }
-.project-heading h1 {
+.project-heading h1,
+.settings-heading h1 {
   margin: 0;
   font-size: 26px;
   white-space: nowrap;
@@ -482,6 +484,10 @@ button:focus-visible {
   object-fit: cover;
   border-radius: 50%;
   border: 1px solid var(--line, #8883);
+}
+/* Codex、Grok 等终端商标以深色笔画为主，深色主题沿用浅色底保证可辨识。 */
+.app-shell.dark .session-avatar {
+  background: #fbf5f7;
 }
 .session-status-badge .n-badge-sup {
   justify-content: center;
@@ -971,10 +977,27 @@ button:focus-visible {
   padding: 15px 12px;
 }
 .tray-mode .project-card {
-  --background-avatar-size: 88px;
-  --background-avatar-bottom: -26px;
+  /* 背景高度略高于卡片一半并缩小 4px；水平线以下的桌面已抠除，只留下手与装饰溢出。 */
+  --background-avatar-height: calc(58% - 4px);
+  --background-avatar-step: 20px;
   padding: 16px;
   min-height: 100px;
+}
+/* 拉长分支名仍要留给右侧角色背景，最多占卡片内容宽度一半。 */
+.tray-mode .git-row {
+  max-width: 50%;
+}
+.tray-mode .card-avatar-background {
+  overflow: visible;
+}
+.tray-mode .card-avatar-background-image {
+  /* 各模型水平线在素材中的位置不同，负 bottom 把线位统一贴到卡片外底边。 */
+  --background-avatar-drop: 0.078125;
+  right: calc(12px + var(--avatar-shift) * var(--background-avatar-step));
+  bottom: calc(var(--background-avatar-height) * var(--background-avatar-drop) * -1 - 1px);
+  width: auto;
+  height: var(--background-avatar-height);
+  object-fit: contain;
 }
 .tray-mode .project-card.is-busy {
   padding-top: 13px;

@@ -11,15 +11,15 @@
 ## 特性
 
 - **项目总览**：Git 仓库与普通文件夹都能添加，不同 worktree 分别管理；长标题自动省略，悬停查看完整路径、分支与改动。
-- **会话状态**：执行中、等待输入和空闲通过卡片边框与指示灯区分；头像、任务标题和完整会话 ID 就近查看。
+- **会话状态**：执行中、等待输入、出现故障和空闲通过卡片边框与指示灯区分；头像、任务标题和完整会话 ID 就近查看。
 - **终端接入**：内置 Codex、WorkBuddy、Claude Code、Grok、Qoder 的规则、skill 与原生 hook 集成，安装前备份，卸载只清除 Ebisu 管理的配置。
 - **桌面驻留**：托盘弹窗复用同一项目面板，关闭主窗口仅隐藏；支持跟随系统、浅色和深色主题。
 - **本地优先**：服务只监听 `127.0.0.1`，所有请求需要 bearer token，不保存提示词、回复或 Git diff，也不提供 agent 控制操作。
 
 ## 界面
 
-| 浅色 | 深色 |
-| --- | --- |
+| 浅色                                                   | 深色                                                  |
+| ------------------------------------------------------ | ----------------------------------------------------- |
 | ![浅色主题的项目面板](docs/images/dashboard-light.png) | ![深色主题的项目面板](docs/images/dashboard-dark.png) |
 
 界面使用线性垒石标记，主色系取自绯红、玫粉与冰蓝的低饱和组合。
@@ -50,26 +50,26 @@ pnpm package:mac
 1. 点击“关联文件夹”，选择 Git 仓库或普通文件夹。普通文件夹不显示 Git 区域；不同 worktree 分别添加。
 2. 在“设置”检查自动探测结果，按需安装各终端的通知集成。不会自动修改所有终端配置。
 3. 重启已有 agent 会话，使全局规则与 hook 生效。终端开始处理已注册目录后，其会话会出现在卡片上。
-4. 执行中显示蓝色上边框和圆点；任一会话等待输入时显示黄色及“需要处理”。恢复执行后清除等待标记，完成、失败或取消后释放。十分钟无新请求也会释放。
+4. 执行中显示蓝色上边框和圆点；任一会话等待输入时显示黄色及“需要处理”；出现网络或额度故障时显示红色及“出现故障”。恢复执行后清除等待标记；故障会保留到该项目下一次执行中上报。完成或取消后释放执行会话，十分钟无新请求也会释放执行中与等待中的会话。
 5. 点击托盘图标可查看同一项目面板。关闭主窗口仅隐藏窗口，彻底退出请使用托盘右键菜单或 Cmd+Q。
 
 卡片上的 Git clean 颜色与目录忙碌灯独立：Git 干净的目录也可能正在被 agent 阅读或规划。增删改按文件统计，暂存与工作区重复改动只算一次；重命名和冲突算修改，未跟踪文件算新增。
 
 头像详情中的“任务”显示终端提供的真实会话标题。Codex 可从本地会话索引读取与应用标题栏一致的名称，后续改名也会同步；其他终端通过通知协议上报。未取得标题时显示“未提供”，不会根据提示词生成或猜测。
 
-项目标题与文件夹图标同行，长标题自动省略。悬停图标查看完整名称、路径、分支、Git 状态和增删改数量；通过三点菜单在 Finder 中打开目录。会话以单行头像显示，超出时收纳到“+x”；悬停头像或“+x”查看详情并复制完整会话 ID，面板不提供 agent 控制操作。头像来自已确认的模型名，模型未知时使用终端商标；设置页可替换本地头像。
+项目标题与文件夹图标同行，长标题自动省略。悬停图标查看完整名称、路径、分支、Git 状态和增删改数量；通过三点菜单在 Finder 中打开目录。会话以单行终端商标头像显示，超出时收纳到“+x”；悬停头像或“+x”查看详情并复制完整会话 ID，面板不提供 agent 控制操作。卡片背景使用已识别模型的角色形象，模型未知时不显示背景；设置页可替换本地素材。
 
 ## 接入机制
 
 通知集成包含全局常驻规则、通知 skill 和原生生命周期 hook。skill 本身是模型按需调用的能力，不能提供强制执行保证，因此 hook 与规则共同补充。
 
-| 终端 | 规则 | Skill | Hook 配置 |
-| --- | --- | --- | --- |
-| Codex | `~/.codex/AGENTS.md` 标记块 | `~/.agents/skills/ebisu-codex/` | `~/.codex/hooks.json` |
-| WorkBuddy | `~/.workbuddy/AGENTS.md` 标记块 | `~/.workbuddy/skills/ebisu-workbuddy/` | `~/.workbuddy/settings.json` |
-| Claude Code | `~/.claude/rules/ebisu-activity.md` | `~/.claude/skills/ebisu-claude/` | `~/.claude/settings.json` |
-| Grok | `~/.grok/rules/ebisu-activity.md` | `~/.grok/skills/ebisu-grok/` | `~/.grok/hooks/ebisu.json` |
-| Qoder | `~/.qoder/AGENTS.md` 标记块 | `~/.qoder/skills/ebisu-qoder/` | `~/.qoder/settings.json` |
+| 终端        | 规则                                | Skill                                  | Hook 配置                    |
+| ----------- | ----------------------------------- | -------------------------------------- | ---------------------------- |
+| Codex       | `~/.codex/AGENTS.md` 标记块         | `~/.agents/skills/ebisu-codex/`        | `~/.codex/hooks.json`        |
+| WorkBuddy   | `~/.workbuddy/AGENTS.md` 标记块     | `~/.workbuddy/skills/ebisu-workbuddy/` | `~/.workbuddy/settings.json` |
+| Claude Code | `~/.claude/rules/ebisu-activity.md` | `~/.claude/skills/ebisu-claude/`       | `~/.claude/settings.json`    |
+| Grok        | `~/.grok/rules/ebisu-activity.md`   | `~/.grok/skills/ebisu-grok/`           | `~/.grok/hooks/ebisu.json`   |
+| Qoder       | `~/.qoder/AGENTS.md` 标记块         | `~/.qoder/skills/ebisu-qoder/`         | `~/.qoder/settings.json`     |
 
 安装前备份改动文件并增量合并 hook；卸载只清除 Ebisu 管理的配置。用户改写过的 skill 会被保留并报告冲突，不会直接覆盖。Codex 没有声明 hook 开关时添加带标记的开关，显式禁用时显示“能力受限”并保留用户选择。
 
@@ -96,7 +96,7 @@ Authorization: Bearer <runtime.json 中的 token>
 }
 ```
 
-`path`、`terminal`、`sessionId`、`action` 必填。`phase` 默认 `executing`，支持 `waiting`；`model` 未知时省略。重复 `enter` 刷新租约，`exit` 释放占用。未注册目录返回 `ignored: true`，不会自动创建卡片。
+`path`、`terminal`、`sessionId`、`action` 必填。`phase` 默认 `executing`，支持 `waiting` 和 `error`；`model` 未知时省略。重复 `enter` 刷新租约，`exit` 释放占用；同项目收到新的 `executing` 时会清除全部故障记录。未注册目录返回 `ignored: true`，不会自动创建卡片。
 
 通知工具位于 `~/Library/Application Support/Ebisu/integration/report`，使用应用自带的 Electron Node 运行时：
 

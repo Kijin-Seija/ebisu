@@ -351,8 +351,14 @@ async function boot(): Promise<void> {
     const key = `${parts[0]}:${parts[1]}` as AvatarKey
     const custom = store.settings().avatars[key]
     const base = path.join(resources, 'avatars', `${parts[0]}-${parts[1]}`)
-    // 装饰背景优先使用随包发布的透明轮廓，小头像保持原图；自定义头像使用用户提供的透明通道。
-    const silhouette = path.join(resources, 'avatars', 'backgrounds', `${parts[0]}-${parts[1]}.png`)
+    // 装饰背景优先使用随包发布的透明轮廓，小头像保持原图；托盘使用 Q 版素材，主窗口沿用旧轮廓。
+    const backgroundFolder = url.searchParams.get('tray') === '1' ? 'tray' : 'backgrounds'
+    const silhouette = path.join(
+      resources,
+      'avatars',
+      backgroundFolder,
+      `${parts[0]}-${parts[1]}.png`
+    )
     const filename =
       custom && existsSync(custom)
         ? custom

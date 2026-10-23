@@ -122,6 +122,43 @@ describe('目录与会话租约', () => {
     report(project.path, { action: 'exit', sequence: 5 })
     expect(store.sessions(project.id)).toHaveLength(0)
   })
+  it('故障跨退出与租约保留，并由同项目下一次执行请求清除', () => {
+    const project = folder('repo')
+    const other = folder('other')
+    report(project.path, { sessionId: 'failed', phase: 'error', sequence: 1 })
+    report(other.path, { sessionId: 'other-failed', phase: 'error', sequence: 2 })
+    report(project.path, { sessionId: 'failed', action: 'exit', scope: 'session', sequence: 3 })
+    time += LEASE_MS * 2
+    expect(store.sessions(project.id)).toMatchObject([{ sessionId: 'failed', phase: 'error' }])
+    expect(store.sessions(other.id)).toMatchObject([{ sessionId: 'other-failed', phase: 'error' }])
+    // 等待上报不会覆盖故障。
+    report(project.path, {
+      terminal: 'claude',
+      sessionId: 'waiting',
+      phase: 'waiting',
+      sequence: 4
+    })
+    report(project.path, { sessionId: 'failed', phase: 'waiting', sequence: 5 })
+    expect(store.sessions(project.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sessionId: 'failed', phase: 'error' }),
+        expect.objectContaining({ sessionId: 'waiting', phase: 'waiting' })
+      ])
+    )
+    // 同项目的执行中请求清除全部故障，其他项目保持不变。
+    report(project.path, {
+      terminal: 'claude',
+      sessionId: 'resumed',
+      phase: 'executing',
+      sequence: 6
+    })
+    const projectSessions = store.sessions(project.id)
+    expect(projectSessions.some((session) => session.phase === 'error')).toBe(false)
+    expect(projectSessions.find((session) => session.sessionId === 'resumed')?.phase).toBe(
+      'executing'
+    )
+    expect(store.sessions(other.id)).toMatchObject([{ sessionId: 'other-failed', phase: 'error' }])
+  })
   it('每个目录独立释放，session 范围关闭清理跨目录活动', () => {
     const first = folder('one')
     const second = folder('two')

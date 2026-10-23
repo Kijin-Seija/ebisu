@@ -179,8 +179,10 @@ function uninstall(item: IntegrationView): void {
     <div class="preference-divider"></div>
     <div class="avatar-section-heading">
       <div>
-        <strong>会话头像</strong>
-        <p>识别模型时使用模型形象，否则使用终端商标。点击头像可替换本地图片。</p>
+        <strong>头像与背景</strong>
+        <p>
+          会话头像使用终端商标；卡片背景使用已识别模型的角色形象，未识别模型时不显示背景。点击图片可替换本地素材。
+        </p>
       </div>
       <n-button text size="small" @click="run('reset', () => api.resetAvatars(), '已恢复默认头像')"
         >恢复默认</n-button

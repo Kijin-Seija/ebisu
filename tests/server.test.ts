@@ -48,6 +48,7 @@ it('拒绝无令牌、错误令牌和带浏览器 Origin 的请求', async () =>
 })
 it('拒绝无效状态、相对路径、畸形 JSON 和过大请求', async () => {
   expect((await send({ ...event(), action: 'oops' })).status).toBe(400)
+  expect((await send({ ...event(), phase: 'oops' })).status).toBe(400)
   expect((await send({ ...event(), path: './relative' })).status).toBe(400)
   expect((await send({ ...event(), sessionAliases: ['real-other-session'] })).status).toBe(400)
   expect((await send({ ...event(), sessionId: 'a'.repeat(40000) })).status).toBe(413)
@@ -65,6 +66,15 @@ it('并发 upsert 无重复，并实时触发通知；未知目录忽略', async
   const response = await send({ ...event(), path: tmpdir(), sessionId: 'unregistered' })
   expect(await response.json()).toMatchObject({ ok: true, ignored: true })
   expect(store.folders()).toHaveLength(1)
+})
+it('接受故障阶段，并由同项目执行中请求清除全部故障', async () => {
+  const folderId = store.folders()[0].id
+  expect((await send({ ...event(), sessionId: 'failed', phase: 'error' })).status).toBe(200)
+  expect(store.sessions(folderId)).toMatchObject([{ sessionId: 'failed', phase: 'error' }])
+  // 已存在的执行会话发送普通心跳，也会清除项目内其他会话的故障。
+  expect((await send({ ...event(), sessionId: 'alive' })).status).toBe(200)
+  expect((await send({ ...event(), sessionId: 'alive' })).status).toBe(200)
+  expect(store.sessions(folderId)).toMatchObject([{ sessionId: 'alive', phase: 'executing' }])
 })
 it('接收真实任务标题并保留到后续心跳，拒绝空白和超长标题', async () => {
   expect((await send({ ...event(), taskTitle: ' 修复登录问题 ' })).status).toBe(200)

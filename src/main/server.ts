@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, renameSync, writeFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
-import { terminalIds } from '../shared/types'
+import { activityPhases, terminalIds } from '../shared/types'
 import type { Store } from './database'
 
 const activitySchema = z.object({
@@ -25,7 +25,7 @@ const activitySchema = z.object({
     .max(8)
     .optional(),
   action: z.enum(['enter', 'exit']),
-  phase: z.enum(['executing', 'waiting']).optional(),
+  phase: z.enum(activityPhases).optional(),
   model: z.string().max(256).optional(),
   taskTitle: z.string().trim().min(1).max(512).optional(),
   sequence: z.number().int().nonnegative().optional(),

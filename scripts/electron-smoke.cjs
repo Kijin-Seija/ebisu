@@ -34,7 +34,7 @@ async function main() {
     }) + '\n'
   )
   const git = (...args) => execFileSync('git', ['-C', repository, ...args], { stdio: 'pipe' })
-  git('init', '-b', 'main')
+  git('init', '-b', 'feature/strategy-3880-date-time-picker')
   git('config', 'user.name', 'Ebisu')
   git('config', 'user.email', 'test@ebisu.local')
   writeFileSync(path.join(repository, 'existing.ts'), 'original\n')
@@ -109,31 +109,41 @@ async function main() {
     }
     /** 用实际 badge 的计算颜色验收，覆盖主题切换及 hover，避免只检查写入的 CSS 变量。 */
     async function assertCardState(page, state, expectedHeight) {
-      await page.waitForFunction((state) => {
-        const card = document.querySelector('[data-folder="ebisu-workspace"]')
-        if (card?.getAttribute('data-activity-state') !== state) return false
-        if (state === 'idle') return true
-        const badge = card.querySelector(
-          state === 'waiting'
-            ? '.session-status-badge[data-status="waiting"] .n-badge-sup, .session-group-badge .n-badge-sup'
-            : '.session-status-badge[data-status="executing"] .n-badge-sup'
-        )
-        if (!badge) return false
-        const color = getComputedStyle(badge).backgroundColor
-        return (
-          getComputedStyle(card).borderTopColor === color &&
-          getComputedStyle(card.querySelector('.occupancy .status-dot')).backgroundColor === color
-        )
-      }, state)
-      const card = page.locator('[data-folder="ebisu-workspace"]')
-      assert.equal(
-        await card.locator('.occupancy').innerText(),
-        {
-          idle: '空闲可用',
-          executing: '正在协作',
-          waiting: '需要处理'
-        }[state]
+      const tray = page.url().includes('tray=1')
+      await page.waitForFunction(
+        ({ state, tray }) => {
+          const card = document.querySelector('[data-folder="ebisu-workspace"]')
+          if (card?.getAttribute('data-activity-state') !== state) return false
+          if (state === 'idle') return true
+          const badge = card.querySelector(
+            state === 'waiting'
+              ? '.session-status-badge[data-status="waiting"] .n-badge-sup, .session-group-badge .n-badge-sup'
+              : state === 'error'
+                ? '.session-status-badge[data-status="error"] .n-badge-sup, .session-group-badge .n-badge-sup'
+                : '.session-status-badge[data-status="executing"] .n-badge-sup'
+          )
+          if (!badge) return false
+          const color = getComputedStyle(badge).backgroundColor
+          const borderMatches = getComputedStyle(card).borderTopColor === color
+          if (tray) return borderMatches
+          const dot = card.querySelector('.occupancy .status-dot')
+          return borderMatches && dot !== null && getComputedStyle(dot).backgroundColor === color
+        },
+        { state, tray }
       )
+      const card = page.locator('[data-folder="ebisu-workspace"]')
+      assert.equal(await card.locator('.occupancy').count(), tray ? 0 : 1)
+      if (!tray) {
+        assert.equal(
+          await card.locator('.occupancy').innerText(),
+          {
+            idle: '空闲可用',
+            executing: '正在协作',
+            waiting: '需要处理',
+            error: '出现故障'
+          }[state]
+        )
+      }
       const layout = await card.evaluate((card) => ({
         height: card.getBoundingClientRect().height,
         border: getComputedStyle(card).borderTopWidth,
@@ -153,29 +163,63 @@ async function main() {
       const root = app.isPackaged
         ? path.join(process.resourcesPath, 'ebisu')
         : path.join(app.getAppPath(), 'resources')
-      return ['gpt', 'claude', 'deepseek', 'kimi', 'qwen', 'gemini', 'grok'].map((family) => {
-        const pixels = nativeImage
-          .createFromPath(path.join(root, 'avatars/backgrounds', `model-${family}.png`))
-          .toBitmap()
-        let transparent = 0
-        let opaque = 0
-        for (let i = 3; i < pixels.length; i += 4) {
-          if (pixels[i] === 0) transparent++
-          if (pixels[i] === 255) opaque++
-        }
-        return { family, transparent, opaque, total: pixels.length / 4 }
-      })
+      return ['backgrounds', 'tray'].flatMap((folder) =>
+        ['gpt', 'claude', 'deepseek', 'kimi', 'qwen', 'gemini', 'grok'].map((family) => {
+          const image = nativeImage.createFromPath(
+            path.join(root, 'avatars', folder, `model-${family}.png`)
+          )
+          const { width, height } = image.getSize()
+          const pixels = image.toBitmap()
+          let transparent = 0
+          let opaque = 0
+          for (let i = 3; i < pixels.length; i += 4) {
+            if (pixels[i] === 0) transparent++
+            if (pixels[i] === 255) opaque++
+          }
+          // 托盘素材的水平线以下桌面应被抠成透明，仅保留手与装饰。
+          const bottomStart = Math.max(0, height - Math.max(1, Math.round(height * 0.02)))
+          let bottomTransparent = 0
+          for (let y = bottomStart; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+              if (pixels[(y * width + x) * 4 + 3] === 0) bottomTransparent++
+            }
+          }
+          return {
+            folder,
+            family,
+            transparent,
+            opaque,
+            total: pixels.length / 4,
+            bottomTransparent,
+            bottomTotal: width * (height - bottomStart)
+          }
+        })
+      )
     })
     for (const image of silhouettes) {
-      assert.ok(image.total > 0, `${image.family} background asset should exist`)
-      assert.ok(
-        image.transparent > image.total * 0.1,
-        `${image.family} should have no solid backdrop`
-      )
-      assert.ok(image.opaque > image.total * 0.2, `${image.family} silhouette should remain opaque`)
+      const label = `${image.folder}/${image.family}`
+      assert.ok(image.total > 0, `${label} background asset should exist`)
+      assert.ok(image.transparent > image.total * 0.1, `${label} should have no solid backdrop`)
+      assert.ok(image.opaque > image.total * 0.2, `${label} silhouette should remain opaque`)
+      if (image.folder === 'tray') {
+        assert.ok(
+          image.bottomTransparent > image.bottomTotal * 0.8,
+          `${label} desk below the plane should be transparent`
+        )
+      }
     }
     /** 验收轮廓遮挡：人物内部覆盖旧图，轮廓外显示旧图，整组合成后再统一淡化。 */
+    const trayLineDrops = {
+      gpt: 0.078125,
+      claude: 0.078125,
+      deepseek: 0.06640625,
+      kimi: 0.076171875,
+      qwen: 0.134765625,
+      gemini: 0.06640625,
+      grok: 0.07421875
+    }
     async function assertAvatarBackground(page, count, size, step) {
+      const tray = page.url().includes('tray=1')
       const card = page.locator('[data-folder="ebisu-workspace"]')
       await page.waitForFunction(
         (count) =>
@@ -204,9 +248,12 @@ async function main() {
           noOverflow: card.scrollWidth === card.clientWidth,
           right: bounds.right,
           bottom: bounds.bottom,
+          width: bounds.width,
+          height: bounds.height,
           images: [...layer.querySelectorAll('img')].map((image) => ({
             left: image.getBoundingClientRect().left,
             right: image.getBoundingClientRect().right,
+            top: image.getBoundingClientRect().top,
             bottom: image.getBoundingClientRect().bottom,
             width: image.getBoundingClientRect().width,
             height: image.getBoundingClientRect().height,
@@ -217,32 +264,76 @@ async function main() {
         }
       })
       assert.equal(layout.hidden, 'true')
-      assert.equal(layout.overflow, 'hidden')
+      assert.equal(layout.overflow, tray ? 'visible' : 'hidden')
       assert.equal(layout.pointerEvents, 'none')
       assert.equal(layout.opacity, '0.3')
       assert.equal(layout.foregroundAbove, true)
       assert.equal(layout.noOverflow, true)
-      assert.equal(layout.images.at(-1).right, layout.right + 20)
+      assert.equal(layout.images.at(-1).right, tray ? layout.right - 12 : layout.right + 20)
       for (const [index, image] of layout.images.entries()) {
-        assert.equal(image.width, size)
-        assert.equal(image.height, size)
         assert.equal(image.opacity, '1')
         assert.equal(image.backgroundColor, 'rgba(0, 0, 0, 0)')
-        assert.ok(image.bottom > layout.bottom, 'oversized image should be clipped at the bottom')
-        if (index) {
-          assert.equal(image.left - layout.images[index - 1].left, step)
-          assert.ok(layout.images[index - 1].right > image.left, 'background images should overlap')
+        if (tray) {
+          const family = new URL(image.src).pathname.split('/').pop()
+          const lineDrop = trayLineDrops[family]
+          assert.ok(lineDrop, `unknown tray background model: ${family}`)
+          // 托盘角色完整显示，高度略高于卡片一半并缩小 4px。
+          assert.ok(
+            Math.abs(image.height - (layout.height * 0.58 - 4)) < 1.5,
+            'tray background height should be 4px under 58% of the card'
+          )
+          assert.ok(
+            Math.abs(image.width - image.height) < 0.5,
+            'tray background should keep its square ratio'
+          )
+          assert.ok(
+            image.top >= layout.bottom - layout.height,
+            'tray background should fit at the top'
+          )
+          assert.ok(
+            image.left >= layout.right - layout.width,
+            'tray background should fit horizontally'
+          )
+          assert.ok(image.right <= layout.right, 'tray background should fit horizontally')
+          assert.ok(
+            image.bottom > layout.bottom,
+            'contents below the plane should overflow the card'
+          )
+          const overhang = image.bottom - layout.bottom
+          assert.ok(
+            Math.abs(overhang - image.height * lineDrop) <= 1.5,
+            'each character plane should sit on the card bottom'
+          )
+          if (index) {
+            assert.ok(Math.abs(image.left - layout.images[index - 1].left - 20) < 1)
+            assert.ok(layout.images[index - 1].right > image.left)
+          }
+        } else {
+          assert.equal(image.width, size)
+          assert.equal(image.height, size)
+          assert.ok(image.bottom > layout.bottom, 'oversized image should be clipped at the bottom')
+          if (index) {
+            assert.equal(image.left - layout.images[index - 1].left, step)
+            assert.ok(
+              layout.images[index - 1].right > image.left,
+              'background images should overlap'
+            )
+          }
         }
       }
-      // 背景沿用相同模型/终端身份和自定义头像版本，额外选择透明轮廓变体。
-      const backgroundUrl = new URL(layout.images[0].src)
-      assert.equal(backgroundUrl.searchParams.get('background'), '1')
-      backgroundUrl.searchParams.delete('background')
-      assert.equal(
-        backgroundUrl.href,
-        await card.locator('.session-avatar').first().getAttribute('src')
-      )
-      if (count === 3) {
+      // 背景固定使用模型角色的透明轮廓，会话头像则固定使用终端商标。
+      for (const image of layout.images) {
+        const backgroundUrl = new URL(image.src)
+        assert.equal(backgroundUrl.searchParams.get('background'), '1')
+        assert.equal(backgroundUrl.searchParams.get('tray'), tray ? '1' : null)
+        assert.match(backgroundUrl.pathname, /^\/model\//)
+      }
+      const avatarPaths = await card
+        .locator('.session-avatar')
+        .evaluateAll((images) => images.map((image) => new URL(image.src).pathname))
+      assert.ok(avatarPaths.length > 0)
+      assert.ok(avatarPaths.every((path) => path.startsWith('/terminal/')))
+      if (count === 3 && !tray) {
         // 在真实卡片上临时使用透明圆形与红色底层，分别采样轮廓内外，避免把矩形遮挡当作成功。
         const images = card.locator('.card-avatar-background-image')
         const saved = await images.evaluateAll(async (images) => {
@@ -320,7 +411,7 @@ async function main() {
     await assertCardState(window, 'executing', idleHeight)
     await assertCardState(trayPage, 'executing')
     await assertAvatarBackground(window, 1, 180, 90)
-    await assertAvatarBackground(trayPage, 1, 88, 44)
+    await assertAvatarBackground(trayPage, 1)
     // 托盘的有头像/无头像布局原本略有高度差；分别记录基线，验证状态和边框切换不再增高。
     const trayBusyHeight = await trayPage
       .locator('[data-folder="ebisu-workspace"]')
@@ -364,7 +455,7 @@ async function main() {
     )
     assert.equal(
       await window.locator('.session-status-badge[data-status="waiting"] .n-badge-sup').innerText(),
-      '!'
+      '?'
     )
     assert.equal(await window.locator('.session-executing-dots').count(), 2)
     // 采样一轮动画中的三个时刻，验证点数确实分三步变化，同时保留所有 badge 的 processing 波纹。
@@ -499,7 +590,7 @@ async function main() {
     for (const value of [
       'ebisu-workspace',
       repo.path,
-      'main',
+      'feature/strategy-3880-date-time-picker',
       'dirty',
       '新增 1',
       '修改 1',
@@ -532,7 +623,26 @@ async function main() {
     await window.locator('.session-details').waitFor({ state: 'hidden' })
     await window.waitForFunction(() => document.querySelectorAll('.n-message').length === 0)
     await window.screenshot({ path: path.join(screenshots, 'dashboard-light.png') })
+    // 故障会话使用 error badge 与感叹号，项目状态优先于等待和执行。
+    await activity(repository, 'grok', 'grok-fault', { phase: 'error', model: 'grok-4' })
+    await window.locator('.session-status-badge[data-status="error"] .n-badge-sup').waitFor()
+    await assertCardState(window, 'error', idleHeight)
+    await assertAvatarBackground(window, 4, 180, 90)
+    assert.equal(
+      await window.locator('.session-status-badge[data-status="error"] .n-badge-sup').innerText(),
+      '!'
+    )
+    await repoCard.locator('.session.error').hover()
+    await window.locator('.session-details').waitFor()
+    assert.ok((await window.locator('.session-details').innerText()).includes('出现故障'))
+    await window.screenshot({ path: path.join(screenshots, 'error-light.png') })
+    await window.locator('h1').hover()
+    await window.locator('.session-details').waitFor({ state: 'hidden' })
+    // 同项目的下一条执行中请求清除全部故障，故障会话随之释放。
     await activity(repository, 'claude', 'session-claude-7a12f05c', { phase: 'executing' })
+    await window
+      .locator('.session-status-badge[data-status="error"]')
+      .waitFor({ state: 'detached' })
     await assertCardState(window, 'executing', idleHeight)
     // 多于一行容量时显示 +x；气泡横排头像，继续悬停可查看详情并复制 ID。
     for (let i = 0; i < 8; i++)
@@ -547,13 +657,14 @@ async function main() {
     assert.equal(avatarLayout.count + avatarLayout.hidden, 11)
     assert.equal(new Set(avatarLayout.tops).size, 1)
     assert.equal(avatarLayout.overflow, false)
-    await assertAvatarBackground(window, 11, 180, 90)
+    // 8 个未提供模型名的并发会话没有角色背景，背景层只保留三个已识别模型。
+    await assertAvatarBackground(window, 3, 180, 90)
     assert.equal(await repoCard.locator('.session-group-badge .n-badge-sup').count(), 0)
     await activity(repository, 'codex', 'overflow-session-7', { phase: 'waiting' })
     await repoCard.locator('.session-group-badge .n-badge-sup').waitFor()
     // 此时直接展示的会话全在执行，只有 +x 内的会话在等待，卡片也必须显示需要处理。
     await assertCardState(window, 'waiting', idleHeight)
-    assert.equal(await repoCard.locator('.session-group-badge .n-badge-sup').innerText(), '!')
+    assert.equal(await repoCard.locator('.session-group-badge .n-badge-sup').innerText(), '?')
     assert.equal(await repoCard.locator('.session-group-badge .n-base-wave').count(), 1)
     await repoCard.locator('.session-overflow').hover()
     await window.locator('.overflow-session-avatars').waitFor()
@@ -578,6 +689,15 @@ async function main() {
     await window.locator('.overflow-session-avatars').waitFor({ state: 'hidden' })
     await window.locator('.session-details').waitFor({ state: 'hidden' })
     await activity(repository, 'codex', 'overflow-session-7', { phase: 'executing' })
+    await repoCard.locator('.session-group-badge .n-badge-sup').waitFor({ state: 'detached' })
+    await assertCardState(window, 'executing', idleHeight)
+    // 折叠的会话故障时，+x 使用 error 色的感叹号并让项目显示故障。
+    await activity(repository, 'codex', 'overflow-session-7', { phase: 'error' })
+    await repoCard.locator('.session-group-badge .n-badge-sup').waitFor()
+    await assertCardState(window, 'error', idleHeight)
+    assert.equal(await repoCard.locator('.session-group-badge .n-badge-sup').innerText(), '!')
+    // 同项目任一执行中请求清除全部故障；故障会话被释放，+x 回到无状态。
+    await activity(repository, 'codex', 'overflow-session-6', { phase: 'executing' })
     await repoCard.locator('.session-group-badge .n-badge-sup').waitFor({ state: 'detached' })
     await assertCardState(window, 'executing', idleHeight)
     // 窗口缩放触发真实 ResizeObserver，主面板头像容量随卡片宽度变化。
@@ -668,10 +788,8 @@ async function main() {
         .count(),
       1
     )
-    assert.equal(
-      await window.locator('.integration-info p, .settings-footer, .page-heading h1').count(),
-      0
-    )
+    assert.equal(await window.locator('.settings-heading h1').innerText(), '设置.')
+    assert.equal(await window.locator('.integration-info p, .settings-footer').count(), 0)
     assert.equal(await window.getByText('等待会话验证', { exact: true }).count(), 0)
     const skillReview = path.join(screenshots, 'skills', 'ebisu-codex')
     mkdirSync(skillReview, { recursive: true })
@@ -709,11 +827,26 @@ async function main() {
     const trayCard = tray.locator('[data-folder="ebisu-workspace"]')
     await trayCard.locator('.session-overflow').waitFor()
     await assertCardState(tray, 'waiting', trayBusyHeight)
-    await assertAvatarBackground(tray, 3, 88, 44)
+    await assertAvatarBackground(tray, 3)
     assert.equal(await tray.locator('.project-heading, .heading-actions').count(), 0)
+    assert.equal(await tray.locator('.toolbar-sessions').count(), 1)
+    assert.equal(await window.locator('.toolbar-sessions').count(), 1)
     assert.equal(await trayCard.locator('.card-divider, .idle-state').count(), 0)
     assert.equal(await trayCard.locator('.card-top .session').count(), 2)
     assert.equal(await trayCard.locator('.session-overflow').innerText(), '+1')
+    const trayBranch = await trayCard.evaluate((card) => {
+      const branch = card.querySelector('.branch-name')
+      return {
+        cardWidth: card.getBoundingClientRect().width,
+        width: branch.getBoundingClientRect().width,
+        scrollWidth: branch.scrollWidth,
+        clientWidth: branch.clientWidth,
+        textOverflow: getComputedStyle(branch).textOverflow
+      }
+    })
+    assert.ok(trayBranch.width <= trayBranch.cardWidth / 2)
+    assert.equal(trayBranch.textOverflow, 'ellipsis')
+    assert.ok(trayBranch.scrollWidth > trayBranch.clientWidth)
     const trayLayout = await trayCard.evaluate((card) => {
       const title = card.querySelector('.card-project-name').getBoundingClientRect()
       const avatars = card.querySelector('.session-avatar-row').getBoundingClientRect()
@@ -947,7 +1080,7 @@ async function main() {
     await quitAndWait(app, true)
     app = undefined
     console.log(
-      'Electron smoke passed: compact cards, folder/session popovers, ID copy, avatar overflow, long title ellipsis, Git, avatars/customization, waiting/resume, real detection, isolated install, themes, tray synchronization, rename/removal, resident close, graceful quit/restart and bounded shutdown.'
+      'Electron smoke passed: compact cards, folder/session popovers, ID copy, avatar overflow, long title ellipsis, Git, avatars/customization, waiting/error/resume, real detection, isolated install, themes, tray synchronization, rename/removal, resident close, graceful quit/restart and bounded shutdown.'
     )
   } finally {
     if (fullscreenApp) await fullscreenApp.close()
