@@ -17,7 +17,7 @@ const phaseLabels = { executing: '执行中', waiting: '问题待确认', error:
 
 /** Codex 会话 ID 同时是桌面深链的 thread ID；其他终端暂不提供跳转按钮。 */
 async function openSession(session: SessionActivity): Promise<void> {
-  if (session.terminal !== 'codex') return
+  if (session.terminal !== 'codex' || session.remoteDeviceId) return
   try {
     await window.ebisu.openSession(session.terminal, session.sessionId)
   } catch (error) {
@@ -41,7 +41,7 @@ async function copyId(id: string): Promise<void> {
     <div class="detail-session-heading">
       <div class="detail-session-name">
         <strong>{{ names[session.terminal] }}</strong>
-        <n-tooltip v-if="session.terminal === 'codex'">
+        <n-tooltip v-if="session.terminal === 'codex' && !session.remoteDeviceId">
           <template #trigger>
             <n-button
               text

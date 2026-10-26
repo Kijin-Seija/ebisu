@@ -219,6 +219,20 @@ export class Skills {
         .all(row.id) as SkillExperience[]
     }
   }
+  /** 导出只有可移植的源包；文件被外部改写时拒绝传播，不读取经验或任何变量取值。 */
+  exportPackage(id: string): { skillId: string; package: SkillPackage } {
+    const row = this.row(id)
+    const pkg = JSON.parse(row.package) as SkillPackage
+    for (const [relative, file] of Object.entries(pkg.files)) {
+      const current = readFileSync(safeFile(this.directory(row), relative))
+      if (digest(current) !== digest(Buffer.from(file.content, file.encoding ?? 'utf8')))
+        throw new SkillError(409, '技能源文件已被外部修改，无法导出')
+    }
+    pkg.variables = this.definitions(row.id).map(
+      ({ defaultValue: _default, ...definition }) => definition
+    )
+    return { skillId: row.id, package: pkg }
+  }
   /** 返回技能源文件的绝对路径和字节内容，供复制路径、另存为和定位文件使用。 */
   sourceFile(id: string, relative: string): { path: string; name: string; content: Buffer } {
     const row = this.row(id)
@@ -559,7 +573,11 @@ export class Skills {
       .get(skillId, name, scope, owner) as ValueRow | undefined
   }
   /** 读取全局、已安装终端和指定项目的独立取值；敏感值只在显式读取时解密。 */
-  variables(id: string, folderId: string | null = null, reveal: boolean | string = false): VariableView[] {
+  variables(
+    id: string,
+    folderId: string | null = null,
+    reveal: boolean | string = false
+  ): VariableView[] {
     const row = this.row(id)
     const projectId = folderId === null ? null : z.string().uuid().parse(folderId)
     if (projectId && !this.store.folders().some((folder) => folder.id === projectId))

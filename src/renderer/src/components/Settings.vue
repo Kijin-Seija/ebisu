@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { NButton, NSelect, NTooltip, useDialog, useMessage } from 'naive-ui'
 import { RefreshCw, Download, Trash2, ImagePlus, Info } from 'lucide-vue-next'
 import { useDashboard } from '../store'
+import LanSettings from './LanSettings.vue'
 import type { AvatarKey, IntegrationView, Settings } from '../../../shared/types'
 
 const dashboard = useDashboard()
@@ -82,6 +83,7 @@ function uninstall(item: IntegrationView): void {
 </script>
 
 <template>
+  <LanSettings />
   <div class="section-heading integration-heading">
     <h2>终端集成</h2>
     <div class="section-actions">

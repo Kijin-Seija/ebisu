@@ -1,11 +1,14 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { deviceViews } from './device-views'
 import type { Snapshot } from '../../shared/types'
 
 /** 两个窗口各自持有只读快照；主进程变更事件触发重新读取。 */
 export const useDashboard = defineStore('dashboard', () => {
   const snapshot = ref<Snapshot | null>(null)
   const error = ref('')
+  const deviceFilter = ref('local')
+  const views = computed(() => deviceViews(snapshot.value, deviceFilter.value))
   const revision = ref(0)
   let pending: Promise<void> | undefined
   let dirty = false
@@ -30,5 +33,5 @@ export const useDashboard = defineStore('dashboard', () => {
     })
     return pending
   }
-  return { snapshot, error, revision, refresh }
+  return { snapshot, error, revision, refresh, deviceFilter, views }
 })

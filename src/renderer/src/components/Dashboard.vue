@@ -16,6 +16,8 @@ import { useDashboard } from '../store'
 import { backgroundUrl, modelFamily, trayBackgroundUrl } from '../avatars'
 import type { FolderView, SessionActivity } from '../../../shared/types'
 import SessionAvatars from './SessionAvatars.vue'
+import DeviceFilter from './DeviceFilter.vue'
+import type { ProjectView } from '../device-views'
 
 const props = defineProps<{ trayMode?: boolean; dark?: boolean }>()
 const dashboard = useDashboard()
@@ -26,12 +28,14 @@ const dialog = useDialog()
 const themeVars = useThemeVars()
 /** 深色 badge 使用补充色；边框与状态点取同一来源，保证与 Naive UI 原始语义色一致。 */
 const activityColors = computed(() => ({
+  offline: themeVars.value.textColorDisabled,
   idle: props.dark ? themeVars.value.successColorSuppl : themeVars.value.successColor,
   executing: props.dark ? themeVars.value.infoColorSuppl : themeVars.value.infoColor,
   waiting: props.dark ? themeVars.value.warningColorSuppl : themeVars.value.warningColor,
   error: props.dark ? themeVars.value.errorColorSuppl : themeVars.value.errorColor
 }))
 const activityLabels = {
+  offline: '设备离线',
   idle: '空闲可用',
   executing: '正在协作',
   waiting: '需要处理',
@@ -41,9 +45,9 @@ const filter = ref<'all' | 'busy' | 'idle'>('all')
 const renaming = ref<FolderView | null>(null)
 const newName = ref('')
 const saving = ref(false)
-const allFolders = computed(() => dashboard.snapshot?.folders ?? [])
+const allFolders = computed(() => dashboard.views.folders)
 const busyCount = computed(
-  () => allFolders.value.filter((folder) => folder.sessions.length > 0).length
+  () => allFolders.value.filter((folder) => folder.online && folder.sessions.length > 0).length
 )
 /** 每个 tab 的数量始终基于完整项目列表，不随当前筛选消失。 */
 const tabs = computed(
@@ -51,20 +55,31 @@ const tabs = computed(
     [
       { key: 'all', label: '全部项目', count: allFolders.value.length },
       { key: 'busy', label: '正在协作', count: busyCount.value },
-      { key: 'idle', label: '空闲可用', count: allFolders.value.length - busyCount.value }
+      {
+        key: 'idle',
+        label: '空闲可用',
+        count: allFolders.value.filter((folder) => folder.online && !folder.sessions.length).length
+      }
     ] as const
 )
 /** 同一终端会话可以占用多个项目；右侧会话总数按终端和 ID 去重。 */
 const sessionCount = computed(
   () =>
     new Set(
-      allFolders.value.flatMap((folder) =>
-        folder.sessions.map((session) => `${session.terminal}:${session.sessionId}`)
-      )
+      allFolders.value
+        .filter((folder) => folder.online)
+        .flatMap((folder) =>
+          folder.sessions.map(
+            (session) => `${folder.deviceId}:${session.terminal}:${session.sessionId}`
+          )
+        )
     ).size
 )
 /** 聚合全部会话（包含 +x 内的会话）；故障优先于等待，等待优先于执行。 */
-function activityState(folder: FolderView): 'idle' | 'executing' | 'waiting' | 'error' {
+function activityState(
+  folder: ProjectView
+): 'offline' | 'idle' | 'executing' | 'waiting' | 'error' {
+  if (!folder.online) return 'offline'
   if (!folder.sessions.length) return 'idle'
   if (folder.sessions.some((session) => session.phase === 'error')) return 'error'
   return folder.sessions.some((session) => session.phase === 'waiting') ? 'waiting' : 'executing'
@@ -75,7 +90,8 @@ const folders = computed(() => {
     .filter(
       (folder) =>
         filter.value === 'all' ||
-        (filter.value === 'busy' ? folder.sessions.length > 0 : folder.sessions.length === 0)
+        (folder.online &&
+          (filter.value === 'busy' ? folder.sessions.length > 0 : folder.sessions.length === 0))
     )
     .map((folder) => ({
       ...folder,
@@ -85,7 +101,10 @@ const folders = computed(() => {
     }))
   // 全部项目中优先展示协作目录（含等待输入）；稳定排序保留同组原有顺序，不修改快照。
   return filter.value === 'all'
-    ? filtered.sort((a, b) => Number(b.sessions.length > 0) - Number(a.sessions.length > 0))
+    ? filtered.sort(
+        (a, b) =>
+          Number(b.online && b.sessions.length > 0) - Number(a.online && a.sessions.length > 0)
+      )
     : filtered
 })
 
@@ -125,7 +144,8 @@ async function action(operation: () => Promise<unknown>): Promise<void> {
   }
 }
 
-function folderMenu(key: string, folder: FolderView): void {
+function folderMenu(key: string, folder: ProjectView): void {
+  if (folder.remote) return
   if (key === 'open') void action(() => api.openFolder(folder.id))
   if (key === 'rename') {
     renaming.value = folder
@@ -161,6 +181,7 @@ const menu = [
 </script>
 
 <template>
+  <DeviceFilter />
   <div class="grid-toolbar">
     <div class="filter-tabs">
       <button
@@ -178,7 +199,7 @@ const menu = [
       >活跃会话 <strong>{{ sessionCount }}</strong></span
     >
   </div>
-  <div v-if="!dashboard.snapshot?.folders.length" class="empty-panel">
+  <div v-if="!allFolders.length" class="empty-panel">
     <div class="empty-illustration">
       <div class="empty-ring"></div>
       <FolderPlus :size="46" :stroke-width="1.2" /><span class="empty-badge"
@@ -195,9 +216,9 @@ const menu = [
   <div v-else class="project-grid">
     <article
       v-for="folder in folders"
-      :key="folder.id"
+      :key="`${folder.deviceId}:${folder.id}`"
       class="project-card"
-      :class="{ 'is-busy': folder.sessions.length }"
+      :class="{ 'is-busy': folder.online && folder.sessions.length, 'is-offline': !folder.online }"
       :data-folder="folder.name"
       :data-activity-state="folder.activityState"
       :style="{ '--activity-color': activityColors[folder.activityState] }"
@@ -269,12 +290,19 @@ const menu = [
           :max-visible="2"
         />
         <n-dropdown
+          v-if="!folder.remote"
           :options="menu"
           trigger="click"
           @select="(key: string) => folderMenu(key, folder)"
           ><button class="icon-button" :aria-label="`${folder.name} 操作`">
             <MoreHorizontal :size="18" /></button
         ></n-dropdown>
+      </div>
+      <div v-if="folder.remote" class="device-origin">
+        {{ folder.deviceName }} · {{ folder.online ? '在线' : '离线'
+        }}<span v-if="folder.lastSeen">
+          · 更新于 {{ new Date(folder.lastSeen).toLocaleTimeString() }}</span
+        >
       </div>
       <div class="card-meta">
         <div v-if="!folder.available" class="folder-warning">目录不可访问</div>
@@ -301,7 +329,11 @@ const menu = [
         <SessionAvatars v-else :sessions="folder.sessions" />
       </template>
     </article>
-    <button class="add-card" @click="action(() => api.addFolder())">
+    <button
+      v-if="dashboard.deviceFilter === 'local' || dashboard.deviceFilter === 'all'"
+      class="add-card"
+      @click="action(() => api.addFolder())"
+    >
       <span class="add-card-icon">+</span><span>关联新文件夹</span>
     </button>
   </div>

@@ -1454,3 +1454,84 @@ button:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+/* 设备来源与导入预览在明暗主题下沿用现有颜色变量。 */
+.device-filter {
+  width: 240px;
+  max-width: 100%;
+  margin: 0 0 16px;
+}
+.device-origin {
+  color: var(--text-secondary, #8b7c86);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+}
+.is-offline {
+  opacity: 0.65;
+}
+.lan-settings {
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+.lan-settings > .n-input {
+  margin: 8px 0;
+}
+.lan-form-row,
+.lan-device-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+.lan-form-row > .n-input,
+.lan-form-row > .n-select,
+.lan-device-row > span:first-child,
+.lan-device-row > strong {
+  flex: 1;
+  min-width: 0;
+}
+.lan-peer {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.lan-error {
+  color: #c26746;
+  overflow-wrap: anywhere;
+}
+.lan-device-list {
+  margin-top: 20px;
+}
+.lan-device-list h3,
+.import-diff h3 {
+  font-size: 14px;
+}
+.lan-field {
+  display: block;
+  margin: 12px 0;
+}
+.lan-file-select {
+  margin: 16px 0;
+}
+.import-diff {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.import-diff pre,
+.remote-source {
+  overflow: auto;
+  max-height: 660px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+@media (max-width: 700px) {
+  .import-diff {
+    grid-template-columns: 1fr;
+  }
+  .lan-form-row {
+    flex-wrap: wrap;
+  }
+}

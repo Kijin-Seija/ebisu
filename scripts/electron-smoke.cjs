@@ -1127,7 +1127,9 @@ async function main() {
     rmSync(fixture, { recursive: true, force: true })
   }
 }
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+main()
+  .then(() => require('./lan-smoke.cjs')())
+  .catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })

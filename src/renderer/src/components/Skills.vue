@@ -46,6 +46,9 @@ import json from 'highlight.js/lib/languages/json'
 import yaml from 'highlight.js/lib/languages/yaml'
 import markdown from 'highlight.js/lib/languages/markdown'
 import { useDashboard } from '../store'
+import DeviceFilter from './DeviceFilter.vue'
+import RemoteSkill from './RemoteSkill.vue'
+import type { SkillView } from '../device-views'
 import type { TerminalId } from '../../../shared/types'
 import type {
   SkillDetail,
@@ -80,6 +83,7 @@ const names: Record<TerminalId, string> = {
 const scopeNames = { skill: '全局', terminal: '终端', project: '项目' }
 const search = ref('')
 const selected = ref<string | null>(null)
+const remoteSelected = ref<SkillView | null>(null)
 const detail = ref<SkillDetail | null>(null)
 const loading = ref(false)
 const pending = ref(false)
@@ -117,7 +121,7 @@ const projectOptions = computed(
 )
 const skills = computed(
   () =>
-    dashboard.snapshot?.skills.filter((skill) =>
+    dashboard.views.skills.filter((skill) =>
       `${skill.name} ${skill.description}`.toLowerCase().includes(search.value.toLowerCase())
     ) ?? []
 )
@@ -665,18 +669,23 @@ onBeforeUnmount(() => {
       aria-label="搜索技能"
     />
   </div>
+  <DeviceFilter />
+  <RemoteSkill :skill="remoteSelected" @close="remoteSelected = null" />
   <div v-if="skills.length" class="skill-grid">
     <button
       v-for="skill in skills"
-      :key="skill.id"
+      :key="`${skill.deviceId}:${skill.id}`"
       class="skill-card"
       :data-skill="skill.name"
-      @click="selected = skill.id"
+      @click="skill.remote ? (remoteSelected = skill) : (selected = skill.id)"
     >
       <div class="skill-card-heading">
         <BookOpen :size="21" /><strong>{{ skill.name }}</strong>
       </div>
       <p>{{ skill.description }}</p>
+      <span v-if="skill.remote" class="device-origin"
+        >{{ skill.deviceName }} · {{ skill.online ? '在线' : '离线' }}</span
+      >
       <div class="skill-terminal-tags">
         <n-tooltip
           v-for="installation in skill.installations"
