@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "name": "vitest-safe",
+  "description": "当任务需要执行项目测试，尤其是 Vitest、由 Vitest 驱动的 package test 脚本或完整测试套件时使用；也可通过 vitest-safe 显式调用。通过全局 vitest-safe 队列运行命令，避免多个测试进程同时耗尽内存。",
+  "source": "chimata@89419a6ae916cb23b5c9b48068e738a1eafc617f:workflow-templates/vitest-safe",
+  "files": {
+    "SKILL.md": {},
+    "scripts/vitest-safe": {
+      "executable": true
+    }
+  },
+  "variables": [
+    {
+      "name": "VITEST_SAFE_MAX_CONCURRENT",
+      "description": "全局测试最大并发；不设置时沿用现有配置，无配置时为 2",
+      "type": "number",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill"
+      ]
+    },
+    {
+      "name": "VITEST_SAFE_LOCK_DIR",
+      "description": "全局锁目录；不设置时沿用现有配置",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill"
+      ]
+    }
+  ],
+  "dependencies": [
+    "python3"
+  ]
+}

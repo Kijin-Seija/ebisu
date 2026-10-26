@@ -10,10 +10,11 @@ import {
   powerMonitor,
   protocol,
   screen,
+  safeStorage,
   shell,
   Tray
 } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import chokidar, { type FSWatcher } from 'chokidar'
@@ -23,6 +24,7 @@ import { readGitStatus } from './git'
 import { startServer } from './server'
 import { Integrations } from './integrations'
 import { TaskTitles } from './task-titles'
+import { Skills, SkillError, targetSchema } from './skills'
 import { terminalIds, type AvatarKey, type GitStatus, type Snapshot } from '../shared/types'
 
 // 自定义 scheme 仅提供白名单头像，不把完整文件系统暴露给 renderer。
@@ -42,6 +44,7 @@ let quitting = false
 let store: Store
 let integrations: Integrations
 let taskTitles: TaskTitles
+let skills: Skills
 let service: Awaited<ReturnType<typeof startServer>> | undefined
 let serviceError: string | undefined
 let watcher: FSWatcher | undefined
@@ -56,7 +59,7 @@ const terminalSchema = z.enum(terminalIds)
 const avatarSchema = z
   .string()
   .regex(
-    /^(model:(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(codex|workbuddy|claude|grok|qoder))$/
+    /^((model|tray):(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(codex|workbuddy|claude|grok|qoder))$/
   )
 
 function changed(): void {
@@ -120,6 +123,7 @@ async function snapshot(): Promise<Snapshot> {
   )
   return {
     folders,
+    skills: skills.list(),
     integrations: integrations.views(),
     settings: store.settings(),
     service: { running: !!service, port: service?.port ?? 0, error: serviceError }
@@ -234,6 +238,57 @@ function handle(channel: string, callback: (...args: any[]) => unknown): void {
 
 function installIpc(): void {
   handle('snapshot', snapshot)
+  handle('skill-detail', (id: unknown) => skills.detail(z.string().parse(id)))
+  handle(
+    'skill-file-path',
+    (id: unknown, relative: unknown) =>
+      skills.sourceFile(z.string().parse(id), z.string().parse(relative)).path
+  )
+  handle('reveal-skill-file', (id: unknown, relative: unknown) => {
+    const source = skills.sourceFile(z.string().parse(id), z.string().parse(relative))
+    shell.showItemInFolder(source.path)
+  })
+  handle('save-skill-file', async (id: unknown, relative: unknown) => {
+    const source = skills.sourceFile(z.string().parse(id), z.string().parse(relative))
+    if (!mainWindow) throw new Error('主窗口不可用')
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '另存技能文件',
+      defaultPath: path.join(app.getPath('downloads'), source.name)
+    })
+    if (result.canceled || !result.filePath) return null
+    writeFileSync(result.filePath, source.content)
+    return result.filePath
+  })
+  handle('install-skill', (id: unknown, terminal: unknown) => {
+    skills.install(z.string().parse(id), terminalSchema.parse(terminal))
+    changed()
+  })
+  handle('uninstall-skill', (id: unknown, terminal: unknown) => {
+    skills.uninstall(z.string().parse(id), terminalSchema.parse(terminal))
+    changed()
+  })
+  handle('delete-experience', (id: unknown, revision: unknown) => {
+    skills.deleteExperience(
+      z.string().uuid().parse(id),
+      z.number().int().positive().parse(revision)
+    )
+    changed()
+  })
+  handle('skill-variables', (id: unknown, folderId: unknown) =>
+    skills.variables(z.string().parse(id), z.string().uuid().nullable().parse(folderId))
+  )
+  handle('set-skill-variable', (id: unknown, name: unknown, target: unknown, value: unknown) => {
+    skills.setVariable(
+      z.string().parse(id),
+      z.string().parse(name),
+      targetSchema.parse(target),
+      z.string().nullable().parse(value)
+    )
+    changed()
+  })
+  handle('reveal-skill-variable', (id: unknown, name: unknown, target: unknown) =>
+    skills.revealVariable(z.string().parse(id), z.string().parse(name), targetSchema.parse(target))
+  )
   handle('add-folder', async () => {
     const parent = mainWindow?.isVisible() ? mainWindow : undefined
     const options = {
@@ -264,6 +319,14 @@ function installIpc(): void {
     const error = await shell.openPath(folder.path)
     if (error) throw new Error(error)
   })
+  handle('open-session', async (terminal: unknown, session: unknown) => {
+    const id = terminalSchema.parse(terminal)
+    const sessionId = z.string().min(1).max(512).parse(session)
+    if (id !== 'codex') throw new Error('当前仅支持跳转到 Codex 会话')
+    if (sessionId.startsWith('local-')) throw new Error('该会话没有可跳转的 Codex 线程 ID')
+    // Codex 桌面应用通过深链按线程 ID 打开本地聊天；只允许固定协议和已校验的线程 ID。
+    await shell.openExternal(`codex://threads/${encodeURIComponent(sessionId)}`)
+  })
   handle('clear-session', (id: unknown, terminal: unknown, session: unknown) => {
     store.clearSession(
       z.string().uuid().parse(id),
@@ -281,7 +344,8 @@ function installIpc(): void {
     changed()
   })
   handle('uninstall', (id: unknown) => {
-    integrations.uninstall(terminalSchema.parse(id))
+    const terminal = terminalSchema.parse(id)
+    skills.unbind(terminal, () => integrations.uninstall(terminal))
     changed()
   })
   handle('check', (id: unknown) => integrations.check(terminalSchema.parse(id)))
@@ -332,6 +396,25 @@ async function boot(): Promise<void> {
     home: process.env.EBISU_SMOKE ? process.env.EBISU_TEST_HOME : undefined
   })
   integrations.prepareBridge()
+  skills = new Skills(store, {
+    dataDirectory,
+    home: integrations.home,
+    client: integrations.skillsClient,
+    resources,
+    secrets: {
+      encrypt(value) {
+        if (!safeStorage.isEncryptionAvailable())
+          throw new SkillError(503, '系统密钥服务不可用，未保存敏感值')
+        return safeStorage.encryptString(value)
+      },
+      decrypt(value) {
+        if (!safeStorage.isEncryptionAvailable()) throw new SkillError(503, '系统密钥服务不可用')
+        return safeStorage.decryptString(value)
+      }
+    }
+  })
+  skills.seed()
+  integrations.upgradeSkills()
   taskTitles = new TaskTitles(
     // smoke 不得读取真实用户的 Codex 元数据；正式环境支持自定义 CODEX_HOME。
     process.env.EBISU_SMOKE
@@ -348,21 +431,28 @@ async function boot(): Promise<void> {
       !avatarSchema.safeParse(`${parts[0]}:${parts[1]}`).success
     )
       return new Response('Not found', { status: 404 })
-    const key = `${parts[0]}:${parts[1]}` as AvatarKey
+    // 托盘预览与既有 background=1&tray=1 地址共用独立配置，主窗口模型自定义不再覆盖托盘。
+    const isTrayModel =
+      parts[0] === 'tray' ||
+      (parts[0] === 'model' &&
+        url.searchParams.get('background') === '1' &&
+        url.searchParams.get('tray') === '1')
+    const key = `${isTrayModel ? 'tray' : parts[0]}:${parts[1]}` as AvatarKey
     const custom = store.settings().avatars[key]
-    const base = path.join(resources, 'avatars', `${parts[0]}-${parts[1]}`)
+    const assetGroup = isTrayModel ? 'model' : parts[0]
+    const base = path.join(resources, 'avatars', `${assetGroup}-${parts[1]}`)
     // 装饰背景优先使用随包发布的透明轮廓，小头像保持原图；托盘使用 Q 版素材，主窗口沿用旧轮廓。
-    const backgroundFolder = url.searchParams.get('tray') === '1' ? 'tray' : 'backgrounds'
+    const backgroundFolder = isTrayModel ? 'tray' : 'backgrounds'
     const silhouette = path.join(
       resources,
       'avatars',
       backgroundFolder,
-      `${parts[0]}-${parts[1]}.png`
+      `${assetGroup}-${parts[1]}.png`
     )
     const filename =
       custom && existsSync(custom)
         ? custom
-        : url.searchParams.get('background') === '1' && existsSync(silhouette)
+        : (isTrayModel || url.searchParams.get('background') === '1') && existsSync(silhouette)
           ? silhouette
           : ['.webp', '.png', '.svg', '.jpg'].map((extension) => base + extension).find(existsSync)
     return filename
@@ -370,7 +460,7 @@ async function boot(): Promise<void> {
       : new Response('Not found', { status: 404 })
   })
   try {
-    service = await startServer(store, path.join(dataDirectory, 'runtime.json'), changed)
+    service = await startServer(store, path.join(dataDirectory, 'runtime.json'), changed, skills)
   } catch (error) {
     serviceError = String(error)
     console.error('本机服务启动失败:', error)

@@ -3,6 +3,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, renameSync, writeFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
+import { Skills, SkillError } from './skills'
+import { skillRequest } from './skill-protocol'
 import { activityPhases, terminalIds } from '../shared/types'
 import type { Store } from './database'
 
@@ -39,7 +41,12 @@ const identitySchema = activitySchema
   .refine((value) => !value.sessionId.startsWith('local-') && !!value.sessionAliases?.length)
 
 /** 本机服务使用 bearer 认证、请求体限额，并拒绝浏览器来源，避免网页跨站上报。 */
-export async function startServer(store: Store, runtimeFile: string, changed: () => void) {
+export async function startServer(
+  store: Store,
+  runtimeFile: string,
+  changed: () => void,
+  skills?: Skills
+) {
   const token = randomBytes(32).toString('hex')
   const send = (response: ServerResponse, status: number, data: unknown) => {
     response.writeHead(status, {
@@ -66,7 +73,8 @@ export async function startServer(store: Store, runtimeFile: string, changed: ()
       }
       if (
         request.method !== 'POST' ||
-        !['/v1/activity', '/v1/identity'].includes(request.url ?? '')
+        (!['/v1/activity', '/v1/identity'].includes(request.url ?? '') &&
+          !(skills && /^\/v1\/skills\/[a-z-]+$/.test(request.url ?? '')))
       ) {
         send(response, 404, { error: '接口不存在' })
         return
@@ -79,7 +87,7 @@ export async function startServer(store: Store, runtimeFile: string, changed: ()
       const chunks: Buffer[] = []
       for await (const chunk of request) {
         bytes += chunk.length
-        if (bytes > 32768) {
+        if (bytes > (request.url?.startsWith('/v1/skills/') ? 12 * 1024 * 1024 : 32768)) {
           send(response, 413, { error: '请求过大' })
           request.resume()
           return
@@ -87,6 +95,12 @@ export async function startServer(store: Store, runtimeFile: string, changed: ()
         chunks.push(chunk)
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      if (skills && request.url?.startsWith('/v1/skills/')) {
+        const result = skillRequest(skills, request.url.slice('/v1/skills/'.length), body)
+        changed()
+        send(response, 200, result)
+        return
+      }
       if (request.url === '/v1/identity') {
         const identity = identitySchema.safeParse(body)
         if (!identity.success) {
@@ -111,9 +125,24 @@ export async function startServer(store: Store, runtimeFile: string, changed: ()
       changed()
       send(response, 200, { ok: true, ...result, leaseSeconds: 600 })
     } catch (error) {
-      send(response, error instanceof SyntaxError ? 400 : 500, {
-        error: error instanceof SyntaxError ? 'JSON 格式错误' : '状态更新失败'
-      })
+      send(
+        response,
+        error instanceof SkillError
+          ? error.status
+          : error instanceof z.ZodError || error instanceof SyntaxError
+            ? 400
+            : 500,
+        {
+          error:
+            error instanceof SkillError
+              ? error.message
+              : error instanceof z.ZodError
+                ? '参数无效'
+                : error instanceof SyntaxError
+                  ? 'JSON 格式错误'
+                  : '状态更新失败'
+        }
+      )
     }
   })
   server.requestTimeout = 3000

@@ -804,17 +804,56 @@ async function main() {
     )
     await window.waitForFunction(() => document.querySelectorAll('.n-message').length === 0)
     await window.screenshot({ path: path.join(screenshots, 'settings.png'), fullPage: true })
+    await require('./skills-smoke.cjs')({ app, window, runtime, home, data, repo, screenshots })
     await app.evaluate(({ dialog }, image) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [image] })
     }, path.resolve('resources/avatars/terminal-workbuddy.png'))
     await window.evaluate(() => window.ebisu.chooseAvatar('model:gpt'))
     const customized = await window.evaluate(() => window.ebisu.snapshot())
     assert.ok(customized.settings.avatars['model:gpt'].startsWith(data))
+    // 托盘设置展示七种独立形象；预览地址和卡片背景地址必须读取同一自定义副本。
+    assert.equal(await window.locator('[data-avatar^="tray:"]').count(), 7)
+    const readAsset = (url) =>
+      app.evaluate(async ({ net }, url) => {
+        const response = await net.fetch(url)
+        return Buffer.from(await response.arrayBuffer()).toString('base64')
+      }, url)
+    const trayUrl = 'ebisu-asset://avatar/model/gpt?background=1&tray=1'
+    assert.equal(
+      await readAsset(trayUrl),
+      readFileSync(path.resolve('resources/avatars/tray/model-gpt.png')).toString('base64')
+    )
+    const trayImage = path.resolve('resources/avatars/tray/model-claude.png')
+    await app.evaluate(({ dialog }, image) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [image] })
+    }, trayImage)
+    await window.locator('[data-avatar="tray:gpt"]').click()
+    await window.waitForFunction(() => !document.querySelector('[data-avatar="tray:gpt"]').disabled)
+    const withTrayAvatar = (await window.evaluate(() => window.ebisu.snapshot())).settings.avatars
+    assert.ok(withTrayAvatar['tray:gpt'].startsWith(data))
+    assert.notEqual(withTrayAvatar['model:gpt'], withTrayAvatar['tray:gpt'])
+    assert.equal(await readAsset(trayUrl), readFileSync(trayImage).toString('base64'))
+    assert.equal(
+      await readAsset('ebisu-asset://avatar/tray/gpt'),
+      readFileSync(trayImage).toString('base64')
+    )
+    assert.equal(
+      await readAsset('ebisu-asset://avatar/model/gpt?background=1'),
+      readFileSync(customized.settings.avatars['model:gpt']).toString('base64')
+    )
     await window.waitForFunction(() =>
       [...document.images].every((image) => image.complete && image.naturalWidth > 0)
     )
+    await window.screenshot({
+      path: path.join(screenshots, 'settings-tray-avatars.png'),
+      fullPage: true
+    })
     await window.evaluate(() => window.ebisu.resetAvatars())
     assert.deepEqual((await window.evaluate(() => window.ebisu.snapshot())).settings.avatars, {})
+    assert.equal(
+      await readAsset(trayUrl),
+      readFileSync(path.resolve('resources/avatars/tray/model-gpt.png')).toString('base64')
+    )
     await window.evaluate(() => window.ebisu.setTheme('dark'))
     await window.getByRole('button', { name: '项目面板', exact: false }).first().click()
     await window.locator('.app-shell.dark').waitFor()

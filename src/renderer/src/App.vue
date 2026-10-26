@@ -13,15 +13,23 @@ import {
   dateZhCN,
   type GlobalThemeOverrides
 } from 'naive-ui'
-import { LayoutGrid, SlidersHorizontal, Plus, RefreshCw, ArrowUpRight } from 'lucide-vue-next'
+import {
+  LayoutGrid,
+  BookOpen,
+  SlidersHorizontal,
+  Plus,
+  RefreshCw,
+  ArrowUpRight
+} from 'lucide-vue-next'
 import { useDashboard } from './store'
 import Dashboard from './components/Dashboard.vue'
 import Settings from './components/Settings.vue'
+import Skills from './components/Skills.vue'
 import StoneMark from './components/StoneMark.vue'
 
 const dashboard = useDashboard()
 const api = window.ebisu
-const page = ref<'projects' | 'settings'>('projects')
+const page = ref<'projects' | 'skills' | 'settings'>('projects')
 const trayMode = new URLSearchParams(location.search).has('tray')
 const systemDark = ref(matchMedia('(prefers-color-scheme: dark)').matches)
 const query = matchMedia('(prefers-color-scheme: dark)')
@@ -121,6 +129,11 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
               <button :class="{ active: page === 'projects' }" @click="page = 'projects'">
                 <LayoutGrid :size="18" />项目面板<span class="nav-count">{{ folders.length }}</span>
               </button>
+              <button :class="{ active: page === 'skills' }" @click="page = 'skills'">
+                <BookOpen :size="18" />技能列表<span class="nav-count">{{
+                  dashboard.snapshot?.skills.length ?? 0
+                }}</span>
+              </button>
               <button :class="{ active: page === 'settings' }" @click="page = 'settings'">
                 <SlidersHorizontal :size="18" />设置
               </button>
@@ -167,6 +180,9 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
                     <div class="heading-actions"><RefreshButton /><AddButton /></div>
                   </div>
                   <Dashboard :tray-mode="trayMode" :dark="dark" />
+                </template>
+                <template v-else-if="page === 'skills'">
+                  <Skills :tray-mode="trayMode" />
                 </template>
                 <template v-else>
                   <div v-if="!trayMode" class="page-heading settings-heading">

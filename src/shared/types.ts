@@ -4,7 +4,7 @@ export type TerminalId = (typeof terminalIds)[number]
 export type ModelFamily = 'gpt' | 'claude' | 'deepseek' | 'kimi' | 'qwen' | 'gemini' | 'grok'
 export const activityPhases = ['executing', 'waiting', 'error'] as const
 export type ActivityPhase = (typeof activityPhases)[number]
-export type AvatarKey = `model:${ModelFamily}` | `terminal:${TerminalId}`
+export type AvatarKey = `model:${ModelFamily}` | `tray:${ModelFamily}` | `terminal:${TerminalId}`
 /** 上报携带真实路径；sequence 用于抵御异步 hook 的迟到请求。 */
 export interface ActivityRequest {
   path: string
@@ -65,6 +65,7 @@ export interface Settings {
   avatars: Partial<Record<AvatarKey, string>>
 }
 export interface Snapshot {
+  skills: import('./skills').SkillSummary[]
   folders: FolderView[]
   integrations: IntegrationView[]
   settings: Settings
@@ -72,11 +73,31 @@ export interface Snapshot {
 }
 /** preload 只公开业务操作，不向网页暴露通用 IPC、文件或命令执行能力。 */
 export interface EbisuApi {
+  skillDetail(id: string): Promise<import('./skills').SkillDetail>
+  skillFilePath(id: string, relative: string): Promise<string>
+  revealSkillFile(id: string, relative: string): Promise<void>
+  saveSkillFile(id: string, relative: string): Promise<string | null>
+  installSkill(id: string, terminal: TerminalId): Promise<void>
+  uninstallSkill(id: string, terminal: TerminalId): Promise<void>
+  deleteExperience(id: string, revision: number): Promise<void>
+  skillVariables(id: string, folderId: string | null): Promise<import('./skills').VariableView[]>
+  setSkillVariable(
+    id: string,
+    name: string,
+    target: import('./skills').VariableTarget,
+    value: string | null
+  ): Promise<void>
+  revealSkillVariable(
+    id: string,
+    name: string,
+    target: import('./skills').VariableTarget
+  ): Promise<string | null>
   snapshot(): Promise<Snapshot>
   addFolder(): Promise<void>
   removeFolder(id: string): Promise<void>
   renameFolder(id: string, name: string): Promise<void>
   openFolder(id: string): Promise<void>
+  openSession(terminal: TerminalId, sessionId: string): Promise<void>
   clearSession(folderId: string, terminal: TerminalId, sessionId: string): Promise<void>
   rescan(): Promise<void>
   install(id: TerminalId): Promise<void>

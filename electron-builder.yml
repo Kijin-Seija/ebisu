@@ -12,6 +12,11 @@ files:
 extraResources:
   - from: resources
     to: ebisu
+    # 默认技能只保留在本地数据库，不随安装包携带。
+    filter:
+      - '**/*'
+      - '!skills'
+      - '!skills/**/*'
 asarUnpack:
   - node_modules/better-sqlite3/**
 mac:

@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "summary",
+    "issues",
+    "new_consensus_exclusions",
+    "next_action"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "origin",
+          "confidence",
+          "evidence_kind",
+          "evidence",
+          "current_state_reachable",
+          "reproduction",
+          "description",
+          "fix_suggestion",
+          "location",
+          "delivery_blocking",
+          "non_blocking_reason",
+          "reopens_consensus_id",
+          "related_backlog_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["blocking", "important", "minor"]
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "change_introduced",
+              "task_related",
+              "pre_existing",
+              "out_of_scope"
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          },
+          "evidence_kind": {
+            "type": "string",
+            "enum": [
+              "failing_check",
+              "runtime_reproduction",
+              "safe_poc",
+              "document_observation",
+              "deterministic_current_path",
+              "static_suspicion",
+              "future_risk",
+              "best_practice",
+              "insufficient_evidence"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "current_state_reachable": {
+            "type": "boolean"
+          },
+          "reproduction": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "preconditions",
+                  "steps_or_command",
+                  "expected",
+                  "actual",
+                  "observed"
+                ],
+                "properties": {
+                  "preconditions": {"type": "string", "minLength": 1},
+                  "steps_or_command": {"type": "string", "minLength": 1},
+                  "expected": {"type": "string", "minLength": 1},
+                  "actual": {"type": "string", "minLength": 1},
+                  "observed": {"type": "boolean"}
+                }
+              }
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fix_suggestion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "location": {
+            "type": "string",
+            "minLength": 1
+          },
+          "delivery_blocking": {
+            "type": "boolean"
+          },
+          "non_blocking_reason": {
+            "oneOf": [
+              {"type": "null"},
+              {"type": "string", "minLength": 1}
+            ]
+          },
+          "reopens_consensus_id": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              }
+            ]
+          },
+          "related_backlog_id": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              }
+            ]
+          }
+        },
+        "anyOf": [
+          {
+            "properties": {
+              "origin": {"enum": ["change_introduced", "task_related"]},
+              "evidence_kind": {
+                "enum": ["failing_check", "runtime_reproduction", "safe_poc", "document_observation"]
+              },
+              "current_state_reachable": {"const": true},
+              "reproduction": {
+                "type": "object",
+                "properties": {"observed": {"const": true}},
+                "required": ["observed"]
+              },
+              "delivery_blocking": {"const": true},
+              "non_blocking_reason": {"type": "null"}
+            },
+            "required": [
+              "origin",
+              "evidence_kind",
+              "current_state_reachable",
+              "reproduction",
+              "delivery_blocking",
+              "non_blocking_reason"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "severity": {"const": "important"},
+                  "confidence": {"const": "high"}
+                },
+                "required": ["severity", "confidence"]
+              },
+              {
+                "properties": {
+                  "severity": {"const": "blocking"},
+                  "confidence": {"enum": ["high", "medium"]}
+                },
+                "required": ["severity", "confidence"]
+              }
+            ]
+          },
+          {
+            "properties": {
+              "delivery_blocking": {"const": false},
+              "non_blocking_reason": {"type": "string", "minLength": 1}
+            },
+            "required": ["delivery_blocking", "non_blocking_reason"]
+          }
+        ]
+      }
+    },
+    "new_consensus_exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "consensus_id",
+          "source_issue_id",
+          "disposition",
+          "description",
+          "location",
+          "rationale",
+          "applies_while",
+          "reopen_if"
+        ],
+        "properties": {
+          "consensus_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "source_issue_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": ["not_a_problem", "no_action_needed"]
+          },
+          "description": {"type": "string", "minLength": 1},
+          "location": {"type": "string", "minLength": 1},
+          "rationale": {"type": "string", "minLength": 1},
+          "applies_while": {"type": "string", "minLength": 1},
+          "reopen_if": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "next_action": {
+      "type": "string",
+      "enum": ["approve", "revise", "human_judgment"]
+    }
+  }
+}

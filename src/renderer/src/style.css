@@ -196,15 +196,23 @@ button:focus-visible {
 }
 /* 标题仅保留页面名称和操作，项目数量归入下方各筛选标签。 */
 .project-heading,
-.settings-heading {
+.settings-heading,
+.skills-heading {
   flex-wrap: wrap;
   margin-bottom: 20px;
 }
 .project-heading h1,
-.settings-heading h1 {
+.settings-heading h1,
+.skills-heading h1 {
   margin: 0;
   font-size: 26px;
   white-space: nowrap;
+}
+/* 搜索框与标题同行，窗口变窄时随标题换行并收缩。 */
+.skills-heading .skills-search {
+  width: 300px;
+  max-width: 100%;
+  -webkit-app-region: no-drag;
 }
 .status-dot {
   width: 6px;
@@ -579,6 +587,18 @@ button:focus-visible {
 }
 .detail-session-heading {
   justify-content: space-between;
+}
+.detail-session-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.open-session-button {
+  color: var(--secondary);
+}
+.open-session-button:hover {
+  color: var(--accent);
 }
 .detail-warning {
   color: var(--amber);
@@ -1064,5 +1084,373 @@ button:focus-visible {
   }
   .avatar-grid {
     grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* 技能详情沿用主题变量，长文件仅在代码区横向滚动，避免抽屉撑破布局。 */
+.skill-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.skill-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 18px;
+}
+.skill-card {
+  text-align: left;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px;
+  cursor: pointer;
+  font: inherit;
+  min-height: 190px;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+.skill-card:hover {
+  border-color: #c2185b;
+  transform: translateY(-2px);
+}
+.skill-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-wrap: anywhere;
+}
+.skill-card p {
+  color: var(--secondary);
+  font-size: 14px;
+  line-height: 1.7;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 70px;
+}
+.skill-terminal-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.skill-terminal-icon {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  object-fit: contain;
+  background: #fbf7f9;
+}
+.skill-description {
+  line-height: 1.8;
+}
+.skill-meta-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 12px;
+  margin: 14px 0 20px;
+}
+.skill-meta-row {
+  display: contents;
+}
+.skill-meta-list dt {
+  font-weight: 600;
+  text-align: left;
+}
+.skill-meta-list dd {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.skill-dependencies {
+  gap: 6px;
+}
+.dependency-badge {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+.dependency-badge--single {
+  white-space: normal;
+}
+.dependency-badge-name,
+.dependency-badge-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+}
+.dependency-badge-name {
+  background: #555;
+  color: #fff;
+}
+.dependency-badge--single .dependency-badge-name {
+  background: var(--dependency-color, #666);
+  line-height: 1.4;
+}
+.dependency-badge-version {
+  background: var(--dependency-color, #007ec6);
+  color: #fff;
+}
+.dependency-badge-icon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  object-fit: contain;
+  /* 本地 SVG 保留品牌色，滤镜统一转白以匹配徽章文字。 */
+  filter: brightness(0) invert(1);
+}
+.skill-context {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.85;
+  margin: 16px 0;
+}
+.skill-code {
+  margin-top: 16px;
+  overflow: auto;
+  padding: 16px;
+  background: #8881;
+  border-radius: 9px;
+  max-height: 65vh;
+  font-size: 13px;
+}
+.skill-project-select {
+  width: 260px;
+  max-width: 100%;
+}
+.skill-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.skill-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.skill-file-row:hover {
+  border-color: #c2185b;
+  background: #c2185b0d;
+}
+.skill-file-path {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.skill-file-arrow {
+  flex: none;
+  opacity: 0.5;
+}
+.skill-file-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.skill-file-actions {
+  display: flex;
+  gap: 8px;
+}
+.experience-item,
+.skill-variable {
+  border: 1px solid #8884;
+  border-radius: 10px;
+  padding: 18px;
+  margin: 16px 0;
+}
+.experience-heading,
+.experience-heading label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.experience-heading label {
+  flex: 1;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  font-size: 12px;
+}
+.experience-heading code {
+  overflow-wrap: anywhere;
+}
+.experience-evidence {
+  border-left: 3px solid #c2185b88;
+  padding-left: 12px;
+  white-space: pre-wrap;
+  font-size: 13px;
+}
+.skill-variable-heading,
+.skill-variable-layer-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.skill-variable-meaning {
+  font-size: 15px;
+  line-height: 1.6;
+}
+.skill-variable-name {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.65;
+  overflow-wrap: anywhere;
+}
+.skill-variable-layer {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #8883;
+}
+.skill-variable-layer-heading {
+  margin-bottom: 8px;
+}
+.skill-variable-note {
+  white-space: normal;
+  line-height: 1.6;
+}
+[data-skill-drawer] {
+  /* 在抽屉层解析底色，避免内部 Tabs 的同名主题变量变成主色。 */
+  --skill-drawer-background: var(--n-color);
+}
+.skill-variable-project {
+  position: sticky;
+  /* 抵消抽屉滚动容器的 16px 顶部内边距，避免吸附栏上方露出滚动内容。 */
+  top: -16px;
+  z-index: 2;
+  /* 使用抽屉主题底色遮住经过的内容，并保留选择器上下的留白。 */
+  background: var(--skill-drawer-background);
+  padding: 16px 0 20px;
+}
+.skill-variable-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 20px;
+}
+/* Naive UI 的切换动画容器默认 overflow:hidden，会中断 sticky；抽屉自身已负责裁切。 */
+[data-skill-drawer] .n-tabs .n-tabs-pane-wrapper {
+  overflow: visible;
+}
+.skill-variable-nav {
+  position: sticky;
+  /* 34px 选择器加上下留白，导航吸附在项目选择器下方。 */
+  top: 70px;
+  align-self: start;
+  max-height: calc(100vh - 214px);
+  overflow-y: auto;
+}
+.skill-variable-anchor {
+  position: static;
+}
+.skill-variable-nav .n-anchor .n-anchor-link .n-anchor-link__title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.5;
+  white-space: normal;
+  text-overflow: clip;
+}
+.skill-variable-content {
+  min-width: 0;
+}
+.skill-variable-content .skill-variable:first-child {
+  margin-top: 0;
+}
+.skill-variable-content .skill-variable:last-child {
+  margin-bottom: 0;
+}
+.skill-variable-scopes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.skill-variable-icon-button {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.skill-variable-icon-button:hover {
+  opacity: 1;
+}
+.skill-variable-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+.skill-install-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 0;
+  border-bottom: 1px solid #8884;
+}
+.skill-install-icon {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  object-fit: contain;
+  background: #fbf7f9;
+}
+.skill-install-row strong {
+  flex: 1;
+}
+@media (max-width: 700px) {
+  .skill-variable-layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .skill-variable-nav {
+    display: none;
+  }
+}
+@media (max-width: 600px) {
+  .skill-grid {
+    grid-template-columns: 1fr;
   }
 }

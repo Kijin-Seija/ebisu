@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "name": "debug-steps",
+  "description": "当用户显式调用 debug-steps，或要求使用 \"debug steps\"、\"debug-steps\"、\"我手动操作你看日志\"、\"按步骤排查前端 bug\" 时使用。适用于用户手动操作页面并反馈现象，agent 启动本地微型日志服务器自动收集浏览器日志，随后基于最新日志建立证据链并分析问题的场景。",
+  "source": "chimata@89419a6ae916cb23b5c9b48068e738a1eafc617f:workflow-templates/debug",
+  "files": {
+    "SKILL.md": {},
+    "references/reference.md": {},
+    "scripts/debug-session.sh": {
+      "executable": true
+    },
+    "scripts/debug_log_server.py": {
+      "executable": true
+    }
+  },
+  "variables": [
+    {
+      "name": "DEBUG_LOG_PORT",
+      "description": "本机调试日志监听端口",
+      "type": "number",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "47821"
+    }
+  ],
+  "dependencies": [
+    "python3 >= 3.10"
+  ]
+}

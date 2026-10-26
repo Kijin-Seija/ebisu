@@ -112,7 +112,9 @@ const trayLineDrops: Record<string, number> = {
 
 function trayBackgroundDrop(session: SessionActivity): number | undefined {
   const family = modelFamily(session.model)
-  return family ? trayLineDrops[family] : undefined
+  if (!family) return undefined
+  // 自选图片没有默认素材的搁板线，直接贴底，避免套用默认裁切比例。
+  return dashboard.snapshot?.settings.avatars[`tray:${family}`] ? 0 : trayLineDrops[family]
 }
 
 async function action(operation: () => Promise<unknown>): Promise<void> {
@@ -132,7 +134,7 @@ function folderMenu(key: string, folder: FolderView): void {
   if (key === 'remove')
     dialog.warning({
       title: '移除目录关联',
-      content: `移除「${folder.name}」的面板记录？实际文件会保留。`,
+      content: `移除「${folder.name}」的面板记录？实际文件会保留；该项目的技能经验和变量覆盖会一并删除。`,
       positiveText: '移除关联',
       negativeText: '取消',
       onPositiveClick: () => action(() => api.removeFolder(folder.id))

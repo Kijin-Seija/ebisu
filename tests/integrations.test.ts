@@ -10,6 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import TOML from '@iarna/toml'
 import { Store } from '../src/main/database'
@@ -283,6 +284,28 @@ it('重复安装不重复添加 hook，卸载保留原规则、环境变量和�
   expect(text('.claude/rules/ebisu-activity.md').trim()).toBe('原有自定义规则')
   expect(existsSync(path.join(home, '.claude/skills/ebisu-claude/SKILL.md'))).toBe(false)
 })
+it('已有管理技能的集成也会自动升级旧活动规则，保留自定义内容', () => {
+  binary('claude')
+  integrations.install('claude')
+  const manifest = JSON.parse(store.integration('claude')!.manifest!)
+  const owned = manifest.owned.find((entry: any) => entry.file.endsWith('/ebisu-claude/SKILL.md'))
+  const oldSkill = readFileSync(owned.file, 'utf8').replace(
+    /^只有宿主明确返回模型接口故障.*$/m,
+    '旧版故障规则'
+  )
+  writeFileSync(owned.file, oldSkill)
+  owned.hash = createHash('sha256').update(oldSkill).digest('hex')
+  const oldRule = text('.claude/rules/ebisu-activity.md').replace(
+    /^只有宿主明确返回模型接口故障.*$/m,
+    '旧版故障规则'
+  )
+  file('.claude/rules/ebisu-activity.md', `用户自定义说明\n${oldRule}`)
+  store.saveManifest('claude', manifest)
+  integrations.upgradeSkills()
+  expect(text('.claude/rules/ebisu-activity.md')).toContain('用户自定义说明')
+  expect(text('.claude/rules/ebisu-activity.md')).not.toContain('旧版故障规则')
+  expect(integrations.views().find((view) => view.id === 'claude')?.health).toBe('restart')
+})
 it('畸形配置导致安装失败时，已写入的文件全部回滚', () => {
   binary('workbuddy')
   file('.workbuddy/AGENTS.md', '现有规则\n')
@@ -369,6 +392,49 @@ it('五种终端完成真实 wrapper→HTTP→SQLite 通知链路；检查不伪
       store.sessions(folder.id).find((session) => session.terminal === terminal)
     ).toBeUndefined()
   }
+})
+it.each(['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const)(
+  '%s 正常结束不依据任务结果判故障，旧规则无接口证据的 error 不会阻止完成',
+  async (terminal) => {
+    const folder = store.addFolder(root)
+    integrations.prepareBridge()
+    server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+    await report(terminal, { hook_event_name: 'UserPromptSubmit', session_id: 'done', cwd: root })
+    await report(terminal, {
+      hook_event_name: 'PostToolUseFailure',
+      session_id: 'done',
+      cwd: root,
+      error: '测试失败，存在阻塞，PR 未合并'
+    })
+    await bridge(['--terminal', terminal, '--session', 'done', '--path', root, '--phase', 'error'])
+    expect(store.sessions(folder.id)).toMatchObject([{ phase: 'executing' }])
+    await report(terminal, {
+      hook_event_name: 'Stop',
+      session_id: 'done',
+      cwd: root,
+      last_assistant_message: '阻塞：测试失败，PR 未合并，仍需后续处理。'
+    })
+    expect(store.sessions(folder.id)).toHaveLength(0)
+  }
+)
+it('手动上报明确的模型接口错误仍保留故障', async () => {
+  const folder = store.addFolder(root)
+  integrations.prepareBridge()
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  await bridge([
+    '--terminal',
+    'codex',
+    '--session',
+    'failed',
+    '--path',
+    root,
+    '--phase',
+    'error',
+    '--model-error',
+    'stream disconnected before completion: Our servers are currently overloaded. Please try again later.'
+  ])
+  await report('codex', { hook_event_name: 'Stop', session_id: 'failed', cwd: root })
+  expect(store.sessions(folder.id)).toMatchObject([{ sessionId: 'failed', phase: 'error' }])
 })
 it('StopFailure 上报故障并在 Stop、租约过期后保留，同项目下一次执行时清除', async () => {
   const folder = store.addFolder(root)

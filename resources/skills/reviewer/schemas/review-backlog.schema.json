@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "backlog_id",
+          "severity",
+          "origin",
+          "confidence",
+          "evidence_kind",
+          "description",
+          "evidence",
+          "current_state_reachable",
+          "reproduction",
+          "location",
+          "reason_non_blocking"
+        ],
+        "properties": {
+          "backlog_id": {
+            "type": "string",
+            "pattern": "^backlog-[a-f0-9]{12}(?:-[1-9][0-9]*)?$"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["blocking", "important", "minor"]
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "change_introduced",
+              "task_related",
+              "pre_existing",
+              "out_of_scope"
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          },
+          "evidence_kind": {
+            "type": "string",
+            "enum": [
+              "failing_check",
+              "runtime_reproduction",
+              "safe_poc",
+              "document_observation",
+              "deterministic_current_path",
+              "static_suspicion",
+              "future_risk",
+              "best_practice",
+              "insufficient_evidence"
+            ]
+          },
+          "description": {"type": "string", "minLength": 1},
+          "evidence": {"type": "string", "minLength": 1},
+          "current_state_reachable": {"type": "boolean"},
+          "reproduction": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "preconditions",
+                  "steps_or_command",
+                  "expected",
+                  "actual",
+                  "observed"
+                ],
+                "properties": {
+                  "preconditions": {"type": "string", "minLength": 1},
+                  "steps_or_command": {"type": "string", "minLength": 1},
+                  "expected": {"type": "string", "minLength": 1},
+                  "actual": {"type": "string", "minLength": 1},
+                  "observed": {"type": "boolean"}
+                }
+              }
+            ]
+          },
+          "location": {"type": "string", "minLength": 1},
+          "reason_non_blocking": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

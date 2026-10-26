@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "explain-code",
+  "description": "当用户显式调用 explain-code，希望以说明书或 API 文档式结构理解现有程序、模块、调用链或运行机制时使用。先建立主线和角色地图，再按需展开实现细节；不用于自动修改代码或普通编码任务。触发词：解释代码、代码说明、梳理主流程、explain code。",
+  "source": "chimata@89419a6ae916cb23b5c9b48068e738a1eafc617f:workflow-templates/explain-code",
+  "files": {
+    "SKILL.md": {},
+    "agents/openai.yaml": {}
+  },
+  "variables": [],
+  "dependencies": []
+}

@@ -1,0 +1,249 @@
+{
+  "version": 1,
+  "name": "push-code",
+  "description": "当用户显式调用 push-code，或要求使用 \"push-code skill\"、\"push code workflow\"、\"推当前分支并创建 MR\"、\"跟进 GitLab code review 到可提交状态\" 时使用。适用于需要把当前分支推送到 GitLab、直接调用 GitLab REST API 创建合到主分支的 MR、轮询 online review discussions / 普通 MR notes / mergeability 状态，并根据 review 评论继续修复或发起异议回复的场景。",
+  "source": "chimata@89419a6ae916cb23b5c9b48068e738a1eafc617f:workflow-templates/push-code",
+  "files": {
+    "SKILL.md": {},
+    "references/reference.md": {},
+    "scripts/push-code-run.sh": {
+      "executable": true
+    },
+    "scripts/push_code_webhook.py": {
+      "executable": true
+    }
+  },
+  "variables": [
+    {
+      "name": "PUSH_CODE_GIT_REMOTE",
+      "description": "Git 远端名称",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "origin"
+    },
+    {
+      "name": "PUSH_CODE_TARGET_BRANCH",
+      "description": "MR 目标分支",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "main"
+    },
+    {
+      "name": "PUSH_CODE_PROJECT_ID",
+      "description": "GitLab 项目 ID 或编码路径",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    },
+    {
+      "name": "PUSH_CODE_POLL_INTERVAL_SECONDS",
+      "description": "当前会话 review 查询间隔（秒）",
+      "type": "number",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "30"
+    },
+    {
+      "name": "PUSH_CODE_REVIEW_TIMEOUT_SECONDS",
+      "description": "当前会话 review 等待超时（秒）",
+      "type": "number",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "3600"
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_INITIAL_REVIEW_GRACE_SECONDS",
+      "description": "初始 review 宽限期（秒）",
+      "type": "number",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "60"
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_BASE_URL",
+      "description": "GitLab 基础地址",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_API_TOKEN",
+      "description": "GitLab API token",
+      "type": "string",
+      "required": true,
+      "sensitive": true,
+      "scopes": [
+        "skill",
+        "project"
+      ]
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_TOKEN_HEADER_NAME",
+      "description": "Token 请求头名称",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "PRIVATE-TOKEN"
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_TOKEN_SCHEME",
+      "description": "Token 认证 scheme",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": ""
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_CA_BUNDLE",
+      "description": "自定义 CA 文件路径",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_SKIP_TLS_VERIFY",
+      "description": "跳过 TLS 验证",
+      "type": "boolean",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "false"
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_EXTRA_HEADER_NAME",
+      "description": "额外认证请求头名称",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    },
+    {
+      "name": "PUSH_CODE_GITLAB_EXTRA_HEADER_VALUE",
+      "description": "额外认证请求头值",
+      "type": "string",
+      "required": false,
+      "sensitive": true,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    },
+    {
+      "name": "PUSH_CODE_REVIEW_APPROVED_STATES",
+      "description": "通过状态列表，逗号分隔",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "approved,pass"
+    },
+    {
+      "name": "PUSH_CODE_REVIEW_CHANGES_REQUESTED_STATES",
+      "description": "需修改状态列表，逗号分隔",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "changes_requested,fail,blocked"
+    },
+    {
+      "name": "PUSH_CODE_REVIEW_PENDING_STATES",
+      "description": "等待状态列表，逗号分隔",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "pending,running,queued,waiting"
+    },
+    {
+      "name": "PUSH_CODE_MR_TITLE_PREFIX",
+      "description": "MR 标题前缀",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "[Ebisu]"
+    }
+  ],
+  "dependencies": [
+    "git",
+    "python3"
+  ]
+}

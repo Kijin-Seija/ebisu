@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "karpathy",
+  "description": "适用于大多数非琐碎的编码、review、重构、排障等工程任务，也可通过 karpathy 显式调用。默认使用这套守则，帮助 当前终端 避免擅自假设、过度设计、顺手改无关代码，并把任务转成可验证的成功标准。对于纯闲聊、纯翻译、纯信息查询或显而易见的极小机械改动，可不完整启用。",
+  "source": "chimata@89419a6ae916cb23b5c9b48068e738a1eafc617f:workflow-templates/karpathy",
+  "files": {
+    "SKILL.md": {},
+    "references/reference.md": {}
+  },
+  "variables": [],
+  "dependencies": []
+}

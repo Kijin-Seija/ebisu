@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "debug-manual",
+  "description": "当用户显式调用 debug-manual，或要求使用 \"debug manual\"、\"debug-manual\"、\"手动打点排查\"、\"你先加 console 日志我来复现\" 时使用。适用于不启动日志服务器、不做浏览器自动化，而是由 agent 在代码中添加临时 console 日志，用户自行操作并上传日志，再基于日志分析问题的场景。",
+  "source": "chimata@89419a6ae916cb23b5c9b48068e738a1eafc617f:workflow-templates/debug",
+  "files": {
+    "SKILL.md": {}
+  },
+  "variables": [],
+  "dependencies": []
+}

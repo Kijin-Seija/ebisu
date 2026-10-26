@@ -21,6 +21,7 @@
     "@iarna/toml": "^2.2.5",
     "better-sqlite3": "^12.4.1",
     "chokidar": "^4.0.3",
+    "highlight.js": "11.12.0",
     "lucide-vue-next": "^0.468.0",
     "naive-ui": "^2.43.1",
     "pinia": "^3.0.3",

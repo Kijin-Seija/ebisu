@@ -53,7 +53,8 @@ export class Store {
     const columns = this.db.prepare('PRAGMA table_info(activities)').all() as { name: string }[]
     if (!columns.some((column) => column.name === 'taskTitle'))
       this.db.exec('ALTER TABLE activities ADD COLUMN taskTitle TEXT')
-    this.db.pragma('user_version = 3')
+    if (Number(this.db.pragma('user_version', { simple: true })) < 3)
+      this.db.pragma('user_version = 3')
     this.expire()
   }
 

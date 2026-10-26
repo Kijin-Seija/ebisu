@@ -264,10 +264,19 @@ async function main() {
   let phase = args.phase || 'executing'
   let scope = args.scope || 'folder'
   let preserveWaiting = false
+  // 旧规则可能把任务阻塞当成 error；没有宿主接口错误原文的手动故障通知不采纳。
+  // 不扫描最终回答、工具输出或任务结果中的“失败/阻塞”等词语来推断执行故障。
+  if (
+    !args.hook &&
+    action === 'enter' &&
+    phase === 'error' &&
+    (typeof args['model-error'] !== 'string' || !args['model-error'].trim())
+  )
+    return
   if (args.hook) {
     if (event === 'sessionstart') return
     if (event === 'stopfailure') {
-      // 失败会话保留故障标记，直到宿主在该项目重新上报执行中。
+      // StopFailure 是宿主报告的接口失败事件，任务结果由普通 Stop 结束。
       phase = 'error'
       scope = 'session'
     } else if (['stop', 'sessionend', 'interrupt', 'stopcancelled'].includes(event)) {

@@ -43,9 +43,11 @@
 - SessionEnd、Interrupt、StopCancelled：强制退出本会话，但不清除 error。
 - StopFailure：进入 error；故障状态不随 exit、重启或租约过期消失。
 - 同一目录收到任意新的 executing enter 时，清除该目录下所有会话的 error；其他目录不受影响。
-- 普通文本提问、跨目录工作及故障：由全局规则及 skill 主动补报。
+- 普通文本提问、跨目录工作及模型接口故障：由全局规则及 skill 主动补报。任务结果为失败、阻塞、未合并、检查未通过或需要后续处理时仍属于正常结束，必须使用 `exit`，不得写入 `error`。
 
 通知桥跳过“执行自身通知命令”对应的工具前后事件，避免主动上报 waiting、error 或 exit 后被该命令的 PostToolUse 立刻覆盖。
+
+手动桥接故障通知必须同时提供 `--phase error --model-error '宿主返回的接口错误原文'`。缺少接口错误原文的手动 `enter + error` 被忽略，避免旧规则把“阻塞/未合并”等结果上报为故障；不扫描最终回答或工具结果来推断故障。原生 `StopFailure` 本身作为宿主接口失败事件处理。
 
 工具事件只覆盖实际提供的 cwd 与结构化文件/目录参数。不解析任意 shell 命令来猜测目录；涉及其他目录的工具或任务由 skill 显式上报。
 长时间没有事件的命令或思考期间仍依赖会话按规则刷新；executing 与 waiting 超过十分钟没有请求即过期，error 不参与租约过期，只能由同项目的 executing 请求清除。因此仍不能保证捕获不遵守规则的执行。
@@ -62,3 +64,35 @@ HTTP 400 为 JSON 或参数错误，401 为认证或 Origin 被拒绝，404 为�
 
 默认通知桥静默失败，不影响原任务，不自动启动应用，不输出令牌。单次 HTTP 空闲超时为 700ms，hook 配置超时为两秒。
 `--check` 输出健康检查 JSON，`--new-session` 输出新 ID；其他上报不会向 agent 注入提示、阻止工具或自动授权。
+
+## 技能协议 v1
+
+技能接口复用相同服务发现、bearer 认证与 Origin 拒绝规则。所有请求为 `POST /v1/skills/<action>`，JSON 顶层必须有已绑定的 `terminal`（五种终端 ID 之一）。模型名称不参与数据隔离。活动接口仍限 32 KiB，技能接口限 12 MiB；技能包内容另限 8 MiB。
+
+| action              | 除 terminal 之外的请求字段                     | 成功结果                                                                  |
+| ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------- |
+| targets             | 无                                             | 已绑定终端及已有项目的 ID、名称和路径                                     |
+| list                | 无                                             | SkillSummary[]                                                            |
+| create              | package, requestId                             | SkillDetail                                                               |
+| detail              | skillId（UUID 或名称）                         | SkillDetail                                                               |
+| install / uninstall | skillId                                        | `{ok:true}`                                                               |
+| context             | skillId, path                                  | 初始说明、适用经验、非敏感变量、遮罩配置、中央目录和脚本列表              |
+| run-context         | skillId, path                                  | 客户端执行器专用；包含敏感变量，不打印                                    |
+| file                | skillId, file（包内文本路径）                  | `{content:string}`，宿主占位符已渲染                                      |
+| experiences         | ids（1–100 个 UUID）                           | SkillExperience[]，缺失 ID 返回 404                                       |
+| experience-add      | skillId, content, evidence, folderId?          | 新经验，含 UUID、revision、时间                                           |
+| experience-update   | id, revision, content, evidence                | 同 ID 的更新经验                                                          |
+| experience-delete   | id, revision                                   | `{ok:true}`                                                               |
+| variables           | skillId, folderId?                             | 按全局、已安装终端、当前项目分层的 VariableView[]，敏感值只返回是否已设置 |
+| variable-reveal     | skillId, name, target                          | `{value:string \| null}`，显式读取指定层已保存值                          |
+| variable-add        | skillId, variable                              | `{ok:true}`                                                               |
+| variable-delete     | skillId, name                                  | `{ok:true}`，同时删除各层值                                               |
+| variable-set        | skillId, name, target, value（string 或 null） | `{ok:true}`；null 只清除 target 对应层                                    |
+
+`target` 为 `{scope:"skill"}`（全局层）、`{scope:"terminal",terminal:"codex"}` 或 `{scope:"project",folderId:"UUID"}`。终端层和项目层互相独立；顶层 terminal 是调用宿主，target.terminal 只在终端层使用，两者都要求已绑定。
+
+HTTP 创建载荷中的 `package.files` 为 `{相对路径:{content,encoding?:"utf8"|"base64",executable?:boolean}}`；磁盘包清单省略 content，由客户端读取并上传。类型定义见 `src/shared/skills.ts`，完整规范见 [SKILLS.md](SKILLS.md)。
+
+参数无效返回 400，未知技能/经验/项目返回 404，未安装、未绑定、名称或重试标识冲突、修订号过期和受管文件冲突返回 409，密钥服务不可用返回 503。其他文件/数据库故障返回 500。成功变更通知所有窗口重新读取快照。
+
+接口不提供初始文件或脚本修改操作。Renderer 的 preload 不暴露创建、变量定义新增/删除、运行配置或脚本执行能力，只公开查看、安装/卸载、经验删除、变量值编辑及显式显示敏感值。

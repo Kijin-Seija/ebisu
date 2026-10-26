@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "name": "reviewer",
+  "description": "当用户显式要求使用 reviewer skill、reviewer 工作流、让独立 reviewer 审查任务结果或执行持续审查循环时使用。先完成主任务，再执行上下文隔离的独立盲审；只有当前状态下已实际复现、可由主 agent 独立复验且与任务相关的缺陷才能阻塞交付。未来风险、静态猜测和“可能导致”类 finding 进入 backlog。一次独立盲审没有交付阻塞问题后稳定收敛；非 goal 模式默认最多 10 轮，goal 模式全局最多 20 轮。",
+  "source": "chimata@89419a6ae916cb23b5c9b48068e738a1eafc617f:workflow-templates/reviewer",
+  "files": {
+    "SKILL.md": {},
+    "references/reference.md": {},
+    "scripts/reviewer-run.sh": {
+      "executable": true
+    },
+    "schemas/consensus-exclusions.schema.json": {},
+    "schemas/workflow-state.schema.json": {},
+    "schemas/review-backlog.schema.json": {},
+    "schemas/codex-review.schema.json": {},
+    "prompts/codex-review-request.md": {},
+    "prompts/claude-review-response.md": {},
+    "prompts/dispute-report.md": {},
+    "prompts/codex-review-response.md": {},
+    "prompts/codex-blind-review-request.md": {},
+    "prompts/workbuddy-review-response.md": {},
+    "references/variants/codex.md": {},
+    "references/variants/claude.md": {},
+    "references/variants/grok.md": {},
+    "references/variants/workbuddy.md": {},
+    "references/variants/qoder.md": {}
+  },
+  "variables": [
+    {
+      "name": "REVIEWER_CODEX_BIN",
+      "description": "外部审查用 Codex CLI 路径",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ],
+      "defaultValue": "codex"
+    },
+    {
+      "name": "REVIEWER_CODEX_REVIEW_MODEL",
+      "description": "外部审查模型；未设置时使用 CLI 默认模型",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    }
+  ],
+  "dependencies": [
+    "python3",
+    "外部审查模式需要 Codex CLI；原生子代理模式不需要"
+  ],
+  "variants": {
+    "codex": "references/variants/codex.md",
+    "claude": "references/variants/claude.md",
+    "grok": "references/variants/grok.md",
+    "workbuddy": "references/variants/workbuddy.md",
+    "qoder": "references/variants/qoder.md"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "topic_slug",
+    "artifact_type",
+    "git_baseline",
+    "max_blind_audits",
+    "rollover_every",
+    "required_qualifying_blind_audits",
+    "consecutive_qualifying_blind_audits",
+    "completed_blind_audits",
+    "next_blind_audit",
+    "session_segment",
+    "completed_in_current_session",
+    "status"
+  ],
+  "properties": {
+    "version": {"const": 3},
+    "topic_slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "artifact_type": {"type": "string", "enum": ["code", "doc"]},
+    "git_baseline": {"type": "string", "minLength": 1},
+    "max_blind_audits": {
+      "type": "string",
+      "pattern": "^(?:[1-9][0-9]*|20 \\(goal-mode\\))$"
+    },
+    "rollover_every": {"const": 10},
+    "required_qualifying_blind_audits": {"const": 1},
+    "consecutive_qualifying_blind_audits": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "completed_blind_audits": {"type": "integer", "minimum": 0},
+    "next_blind_audit": {"type": "integer", "minimum": 1},
+    "session_segment": {"type": "integer", "minimum": 1},
+    "completed_in_current_session": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "handoff_required", "complete", "human_judgment"]
+    }
+  }
+}

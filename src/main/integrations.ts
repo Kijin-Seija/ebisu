@@ -19,119 +19,11 @@ import TOML from '@iarna/toml'
 import type { Store } from './database'
 import { terminalIds, type IntegrationView, type TerminalId } from '../shared/types'
 
+import { FileChanges, safeFile } from './skill-files'
+import { adapters, terminalNames } from './terminal-adapters'
+export { terminalNames } from './terminal-adapters'
+
 const execute = promisify(execFile)
-export const terminalNames: Record<TerminalId, string> = {
-  codex: 'Codex',
-  workbuddy: 'WorkBuddy',
-  claude: 'Claude Code',
-  grok: 'Grok',
-  qoder: 'Qoder'
-}
-interface Adapter {
-  commands: string[]
-  apps: string[]
-  root: string
-  skillRoot: string
-  rule: string
-  hookFile?: string
-  events: string[]
-}
-/** 不把 Claude 桌面聊天应用误识别成 Claude Code；后者需 CLI 或其专用应用。 */
-const adapters: Record<TerminalId, Adapter> = {
-  codex: {
-    commands: ['codex'],
-    apps: ['Codex.app', 'ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app'],
-    root: '.codex',
-    skillRoot: '.agents/skills',
-    rule: '.codex/AGENTS.md',
-    hookFile: '.codex/hooks.json',
-    events: [
-      'UserPromptSubmit',
-      'PreToolUse',
-      'PostToolUse',
-      'PermissionRequest',
-      'Stop',
-      'Interrupt',
-      'SessionEnd'
-    ]
-  },
-  workbuddy: {
-    commands: ['workbuddy'],
-    apps: ['WorkBuddy.app'],
-    root: '.workbuddy',
-    skillRoot: '.workbuddy/skills',
-    rule: '.workbuddy/AGENTS.md',
-    hookFile: '.workbuddy/settings.json',
-    events: [
-      'UserPromptSubmit',
-      'PreToolUse',
-      'PostToolUse',
-      'PermissionRequest',
-      'Notification',
-      'Stop',
-      'StopFailure',
-      'SessionEnd'
-    ]
-  },
-  claude: {
-    commands: ['claude'],
-    apps: ['Claude Code.app'],
-    root: '.claude',
-    skillRoot: '.claude/skills',
-    rule: '.claude/rules/ebisu-activity.md',
-    hookFile: '.claude/settings.json',
-    events: [
-      'UserPromptSubmit',
-      'PreToolUse',
-      'PostToolUse',
-      'PermissionRequest',
-      'Notification',
-      'Stop',
-      'StopFailure',
-      'SessionEnd'
-    ]
-  },
-  grok: {
-    commands: ['grok'],
-    apps: ['Grok CLI.app'],
-    root: '.grok',
-    skillRoot: '.grok/skills',
-    rule: '.grok/rules/ebisu-activity.md',
-    hookFile: '.grok/hooks/ebisu.json',
-    events: [
-      'UserPromptSubmit',
-      'PreToolUse',
-      'PostToolUse',
-      'PermissionRequest',
-      'Notification',
-      'Stop',
-      'StopFailure',
-      'StopCancelled',
-      'SessionEnd'
-    ]
-  },
-  // Qoder Desktop 与 CLI 共用 settings.json hook 协议，见 docs/INTEGRATIONS.md。
-  qoder: {
-    commands: ['qodercli', 'qoder'],
-    apps: ['Qoder.app'],
-    root: '.qoder',
-    skillRoot: '.qoder/skills',
-    rule: '.qoder/AGENTS.md',
-    hookFile: '.qoder/settings.json',
-    events: [
-      'UserPromptSubmit',
-      'PreToolUse',
-      'PostToolUse',
-      'PermissionRequest',
-      'Notification',
-      'Stop',
-      'StopFailure',
-      'SessionEnd',
-      'Elicitation',
-      'ElicitationResult'
-    ]
-  }
-}
 export interface IntegrationOptions {
   home?: string
   appDirectories?: string[]
@@ -167,6 +59,7 @@ const managedBlock =
 export class Integrations {
   readonly home: string
   readonly bridge: string
+  readonly skillsClient: string
   private readonly appDirectories: string[]
   constructor(
     private readonly store: Store,
@@ -178,6 +71,7 @@ export class Integrations {
       path.join(this.home, 'Applications')
     ]
     this.bridge = path.join(options.dataDirectory, 'integration', 'report')
+    this.skillsClient = path.join(options.dataDirectory, '.ebisu', 'tools', 'skills')
   }
 
   /** 分辨“确实安装了可执行程序”和“只有卸载后残留配置”。 */
@@ -221,6 +115,23 @@ export class Integrations {
       { mode: 0o700 }
     )
     chmodSync(this.bridge, 0o700)
+    safeFile(this.options.dataDirectory, '.ebisu/tools/skills')
+    mkdirSync(path.dirname(this.skillsClient), { recursive: true, mode: 0o700 })
+    copyFileSync(
+      path.join(this.options.resources, 'integration/skills.cjs'),
+      `${this.skillsClient}.cjs`
+    )
+    writeFileSync(
+      this.skillsClient,
+      `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${quote(this.options.executable)} ${quote(`${this.skillsClient}.cjs`)} --runtime ${quote(runtime)} "$@"\n`,
+      { mode: 0o700 }
+    )
+    chmodSync(this.skillsClient, 0o700)
+    for (const name of ['ebisu-skill-create', 'ebisu-skill-discuss']) {
+      const destination = safeFile(this.options.dataDirectory, `.ebisu/management/${name}.md`)
+      mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 })
+      copyFileSync(path.join(this.options.resources, 'management', `${name}.md`), destination)
+    }
   }
 
   private ruleText(id: TerminalId): string {
@@ -233,8 +144,8 @@ export class Integrations {
 需要获取上报 ID 时执行 ${command} --new-session；该命令优先返回宿主真实 ID，仅在确实缺失时生成 local- ID。只申请一次，保存并在本会话所有通知中用 --session 复用返回值，不要在不同会话之间共享，也不要将终端名或模型名用作会话 ID。已有 local- ID 时继续传入，原生工具 hook 会将该命令中的临时 ID 绑定到真实身份；不要自行换成另一个 ID。缺少 ID 的请求不会创建活动。
 在涉及其他目录前也执行 enter；执行中至少每两分钟重复 enter 刷新心跳，长时间命令前后也刷新。
 需要向用户提问或等待确认前，执行 enter 并加 --phase waiting；继续执行用 --phase executing。
-遇到网络故障、额度上限等无法继续的问题时，执行 enter 并加 --phase error；该项目的故障状态会保留到下一次 executing 上报。
-任务正常完成或取消时执行 --action exit --scope session，释放此会话涉及的目录；故障状态不因退出而清除。
+任务到达任何终态（成功、失败、阻塞、未合并、检查未通过、部分完成或需要后续处理）都算本次执行正常结束；不要因为结果内容或交付状态执行 --phase error。此时必须执行 --action exit --scope session，释放此会话涉及的目录。
+只有宿主明确返回模型接口故障（例如 stream disconnected、服务过载、额度/鉴权服务错误），导致模型请求本身未能正常完成时，才执行 enter 并加 --phase error --model-error '宿主返回的接口错误原文'；没有实际接口错误信息时禁止上报 error。普通命令失败、测试失败、Git 未合并、审查 finding 和任务阻塞都不属于此类故障。故障状态会保留到下一次 executing 上报。
 上报工具失联时快速静默返回，不改变原任务，不自动启动 Ebisu。不要创建脱离会话持续运行的无限心跳进程。
 此规则只负责本机活动上报，不授权提交、推送、发消息等其他操作。若同时加载了其他终端的 Ebisu 规则，只使用实际宿主终端对应的命令，勿重复执行。
 ${end}`
@@ -254,6 +165,7 @@ ${end}`
     )
     const touched: { file: string; content: string | null; mode: number }[] = []
     const write = (file: string, content: string) => {
+      safeFile(this.home, path.relative(this.home, file))
       const exists = existsSync(file)
       const original = exists ? read(file) : null
       if (original === content) return
@@ -279,6 +191,30 @@ ${end}`
       )
         throw new Error(`已有同名 skill 被修改，请先备份或移走：${skillFile}`)
       write(skillFile, skill)
+      const managedSkills: OwnedFile[] = [{ file: skillFile, hash: hash(skill) }]
+      for (const name of ['ebisu-skill-create', 'ebisu-skill-discuss']) {
+        const description =
+          name === 'ebisu-skill-create'
+            ? 'Only create an Ebisu skill when the user explicitly invokes ebisu-skill-create; do not create skills implicitly during ordinary work.'
+            : 'Discuss, explain, update, add or delete specified Ebisu experience entries when the user invokes ebisu-skill-discuss with id[].'
+        const source = path.join(this.options.dataDirectory, '.ebisu', 'management', `${name}.md`)
+        const contents = `---\nname: ${name}\ndescription: ${description}\n${id === 'workbuddy' ? 'agent_created: true\n' : ''}---\n\n先读取中央说明：${source}\n\n客户端：${quote(this.skillsClient)} --terminal ${id}\n运行客户端 protocol 获取当前协议与示例。\n`
+        const entry = path.join(this.home, adapter.skillRoot, name, 'SKILL.md')
+        const old = manifest?.owned.find((owned) => owned.file === entry)
+        if (existsSync(entry) && (!old || hash(read(entry)) !== old.hash))
+          throw new Error(`同名管理 skill 已存在或已修改：${entry}`)
+        write(entry, contents)
+        managedSkills.push({ file: entry, hash: hash(contents) })
+        if (id === 'codex') {
+          const policyFile = path.join(this.home, adapter.skillRoot, name, 'agents/openai.yaml')
+          const policy = 'policy:\n  allow_implicit_invocation: false\n'
+          const oldPolicy = manifest?.owned.find((owned) => owned.file === policyFile)
+          if (existsSync(policyFile) && (!oldPolicy || hash(read(policyFile)) !== oldPolicy.hash))
+            throw new Error(`管理 skill 配置冲突：${policyFile}`)
+          write(policyFile, policy)
+          managedSkills.push({ file: policyFile, hash: hash(policy) })
+        }
+      }
       const ruleFile = path.join(this.home, adapter.rule)
       const ruleBefore = read(ruleFile)
       const ruleAfter = ruleBefore.includes(begin)
@@ -349,7 +285,7 @@ ${end}`
       this.store.saveManifest(id, {
         version: 1,
         installedAt: Date.now(),
-        owned: [{ file: skillFile, hash: hash(skill) }],
+        owned: managedSkills,
         rule: ruleFile,
         hookFile,
         backups: backupDirectory,
@@ -384,7 +320,48 @@ ${end}`
     }
   }
 
+  upgradeSkills(): void {
+    for (const id of terminalIds) {
+      const row = this.store.integration(id)
+      if (!row?.manifest || !this.detect(id).length) continue
+      const manifest = JSON.parse(row.manifest) as Manifest
+      const hasManagementSkills = manifest.owned.some((owned) =>
+        owned.file.includes('/ebisu-skill-create/')
+      )
+      // 规则也属于受管版本：已有管理技能的宿主仍需更新旧的故障判定说明。
+      if (hasManagementSkills && read(manifest.rule).includes(this.ruleText(id))) continue
+      try {
+        this.install(id)
+      } catch (error) {
+        console.warn('集成规则或管理技能升级失败，保留原配置：', String(error))
+      }
+    }
+  }
+
   uninstall(id: TerminalId): void {
+    const previous = this.store.integration(id)?.manifest
+    if (!previous) return
+    const manifest = JSON.parse(previous) as Manifest
+    const changes = new FileChanges()
+    for (const file of [
+      ...manifest.owned.map((owned) => owned.file),
+      manifest.rule,
+      manifest.hookFile,
+      id === 'codex' ? path.join(this.home, '.codex/config.toml') : undefined
+    ].filter((file): file is string => !!file)) {
+      safeFile(this.home, path.relative(this.home, file))
+      changes.capture(file)
+    }
+    try {
+      this.removeIntegration(id)
+    } catch (error) {
+      changes.rollback()
+      this.store.saveManifest(id, JSON.parse(previous))
+      throw error
+    }
+  }
+
+  private removeIntegration(id: TerminalId): void {
     const row = this.store.integration(id)
     if (!row?.manifest) return
     const manifest = JSON.parse(row.manifest) as Manifest
@@ -429,10 +406,17 @@ ${end}`
       let detail = evidence.length ? '尚未安装通知集成' : '未检测到终端；安装后可重新探测'
       if (row?.manifest) {
         const manifest = JSON.parse(row.manifest) as Manifest
+        const managementIntact = ['ebisu-skill-create', 'ebisu-skill-discuss'].every((name) =>
+          manifest.owned.some(
+            (owned) => owned.file === path.join(this.home, adapters[id].skillRoot, name, 'SKILL.md')
+          )
+        )
         const intact =
+          managementIntact &&
           manifest.owned.every(
             (owned) => existsSync(owned.file) && hash(read(owned.file)) === owned.hash
-          ) && read(manifest.rule).includes(this.ruleText(id))
+          ) &&
+          read(manifest.rule).includes(this.ruleText(id))
         let hookIntact = true
         if (manifest.hookFile) {
           try {

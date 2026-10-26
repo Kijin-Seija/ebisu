@@ -1,0 +1,7 @@
+interface:
+  display_name: "说明书式代码解释"
+  short_description: "把复杂程序整理成主流程清晰、术语易懂的说明书式解释"
+  default_prompt: "使用 $explain-code，以说明书式结构解释这个项目的主要运行流程。"
+
+policy:
+  allow_implicit_invocation: false

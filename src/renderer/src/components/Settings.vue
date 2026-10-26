@@ -39,6 +39,15 @@ const avatarItems: { key: AvatarKey; label: string }[] = [
     }[key]
   }))
 ]
+const allAvatarItems = [
+  ...avatarItems,
+  ...avatarItems
+    .filter((item) => item.key.startsWith('model:'))
+    .map((item) => ({
+      ...item,
+      key: item.key.replace('model:', 'tray:') as AvatarKey
+    }))
+]
 const installedCount = computed(
   () => dashboard.snapshot?.integrations.filter((item) => item.installed).length ?? 0
 )
@@ -62,7 +71,8 @@ async function run(
 function uninstall(item: IntegrationView): void {
   dialog.warning({
     title: `卸载 ${item.name} 集成`,
-    content: '将移除 Ebisu 管理的通知 skill、规则与 hook，保留已有终端配置和备份。',
+    content:
+      '将移除 Ebisu 管理的规则、hook、管理技能及业务技能入口；中央技能、共享经验、变量和已有终端配置保留。',
     positiveText: '卸载集成',
     negativeText: '取消',
     onPositiveClick: () =>
@@ -109,7 +119,9 @@ function uninstall(item: IntegrationView): void {
           ><template #trigger
             ><span class="integration-evidence">{{ item.evidence[0] }}</span></template
           >
-          <div v-for="evidence in item.evidence" :key="evidence">{{ evidence }}</div></n-tooltip
+          <div v-for="evidence in item.evidence" :key="evidence">
+            {{ evidence }}
+          </div></n-tooltip
         >
       </div>
       <span class="installation-badge" :class="{ installed: item.installed }">{{
@@ -190,9 +202,10 @@ function uninstall(item: IntegrationView): void {
     </div>
     <div class="avatar-grid">
       <button
-        v-for="item in avatarItems"
+        v-for="item in allAvatarItems"
         :key="item.key"
         class="avatar-option"
+        :data-avatar="item.key"
         :disabled="!!pending"
         @click="run(item.key, () => api.chooseAvatar(item.key))"
       >
@@ -203,7 +216,13 @@ function uninstall(item: IntegrationView): void {
           /><span class="avatar-edit"><ImagePlus :size="14" /></span>
         </div>
         <span>{{ item.label }}</span
-        ><small>{{ item.key.startsWith('model:') ? '模型形象' : '终端商标' }}</small>
+        ><small>{{
+          item.key.startsWith('terminal:')
+            ? '终端商标'
+            : item.key.startsWith('tray:')
+              ? '托盘模型形象'
+              : '模型形象'
+        }}</small>
       </button>
     </div>
   </div>

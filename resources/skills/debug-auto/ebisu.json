@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "name": "debug-auto",
+  "description": "当用户显式调用 debug-auto，或要求使用 \"debug auto\"、\"debug-auto\"、\"自动化 debug\"、\"全自动排查前端 bug\"、\"用真实浏览器排查\" 时使用。适用于可以由 agent 自行启动项目、优先接管真实浏览器（Chrome DevTools Protocol）、自动操作页面、监听 console/pageerror/network 日志并基于证据分析问题的场景。",
+  "source": "chimata@89419a6ae916cb23b5c9b48068e738a1eafc617f:workflow-templates/debug",
+  "files": {
+    "SKILL.md": {},
+    "scripts/cdp-browser.sh": {
+      "executable": true
+    },
+    "scripts/cdp_browser.py": {
+      "executable": true
+    }
+  },
+  "variables": [
+    {
+      "name": "CDP_BROWSER",
+      "description": "浏览器可执行程序路径（不设置时自动探测）",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    },
+    {
+      "name": "CDP_ENDPOINT",
+      "description": "已有本机浏览器的 CDP 地址",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    },
+    {
+      "name": "CHROME_CDP_PORT",
+      "description": "优先探测的 CDP 端口",
+      "type": "number",
+      "required": false,
+      "sensitive": false,
+      "scopes": [
+        "skill",
+        "terminal",
+        "project"
+      ]
+    }
+  ],
+  "dependencies": [
+    "python3 >= 3.10"
+  ]
+}
