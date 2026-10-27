@@ -14,7 +14,7 @@
 | 字段            | 类型                        | 语义                                                                           |
 | --------------- | --------------------------- | ------------------------------------------------------------------------------ |
 | path            | string，必填                | 现存文件夹绝对路径；显示名称不参与匹配                                         |
-| terminal        | string，必填                | codex / workbuddy / claude / grok / qoder                                      |
+| terminal        | string，必填                | codex / workbuddy / claude / grok / qoder / dsh                                |
 | sessionId       | string，必填                | 同一宿主终端中的稳定会话标识，最长 512 字符                                    |
 | action          | enter / exit，必填          | 进入或刷新 / 退出                                                              |
 | phase           | executing / waiting / error | enter 时生效，默认 executing；error 表示网络、额度等无法继续的故障             |
@@ -67,7 +67,7 @@ HTTP 400 为 JSON 或参数错误，401 为认证或 Origin 被拒绝，404 为�
 
 ## 技能协议 v1
 
-技能接口复用相同服务发现、bearer 认证与 Origin 拒绝规则。所有请求为 `POST /v1/skills/<action>`，JSON 顶层必须有已绑定的 `terminal`（五种终端 ID 之一）。模型名称不参与数据隔离。活动接口仍限 32 KiB，技能接口限 12 MiB；技能包内容另限 8 MiB。
+技能接口复用相同服务发现、bearer 认证与 Origin 拒绝规则。所有请求为 `POST /v1/skills/<action>`，JSON 顶层必须有已绑定的 `terminal`（六种终端 ID 之一）。模型名称不参与数据隔离。活动接口仍限 32 KiB，技能接口限 12 MiB；技能包内容另限 8 MiB。
 
 | action              | 除 terminal 之外的请求字段                     | 成功结果                                                                  |
 | ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------- |

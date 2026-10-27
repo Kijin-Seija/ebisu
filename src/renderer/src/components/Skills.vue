@@ -49,7 +49,7 @@ import { useDashboard } from '../store'
 import DeviceFilter from './DeviceFilter.vue'
 import RemoteSkill from './RemoteSkill.vue'
 import type { SkillView } from '../device-views'
-import type { TerminalId } from '../../../shared/types'
+import { terminalNames } from '../../../shared/types'
 import type {
   SkillDetail,
   SkillExperience,
@@ -73,13 +73,7 @@ const api = window.ebisu
 defineProps<{ trayMode?: boolean }>()
 const message = useMessage()
 const dialog = useDialog()
-const names: Record<TerminalId, string> = {
-  codex: 'Codex',
-  workbuddy: 'WorkBuddy',
-  claude: 'Claude Code',
-  grok: 'Grok',
-  qoder: 'Qoder'
-}
+const names = terminalNames
 const scopeNames = { skill: '全局', terminal: '终端', project: '项目' }
 const search = ref('')
 const selected = ref<string | null>(null)

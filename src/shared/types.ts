@@ -1,8 +1,17 @@
 import type { DeviceApi } from './lan'
 
 /** 终端标识固定为协议值，不能由用户显示名称推断。 */
-export const terminalIds = ['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const
+export const terminalIds = ['codex', 'workbuddy', 'claude', 'grok', 'qoder', 'dsh'] as const
 export type TerminalId = (typeof terminalIds)[number]
+/** 显示名称只用于界面；协议、配置目录和 skill 名称始终使用终端标识。 */
+export const terminalNames: Record<TerminalId, string> = {
+  codex: 'Codex',
+  workbuddy: 'WorkBuddy',
+  claude: 'Claude Code',
+  grok: 'Grok',
+  qoder: 'Qoder',
+  dsh: 'DeepSeek Harness'
+}
 export type ModelFamily = 'gpt' | 'claude' | 'deepseek' | 'kimi' | 'qwen' | 'gemini' | 'grok'
 export const activityPhases = ['executing', 'waiting', 'error'] as const
 export type ActivityPhase = (typeof activityPhases)[number]

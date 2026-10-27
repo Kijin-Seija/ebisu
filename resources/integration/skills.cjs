@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 const PROTOCOL = `Ebisu skills protocol v1
-Usage: skills --terminal <codex|workbuddy|claude|grok|qoder> <command> [options]
+Usage: skills --terminal <codex|workbuddy|claude|grok|qoder|dsh> <command> [options]
   protocol
   list
   targets   (bound terminals and existing projects with IDs)

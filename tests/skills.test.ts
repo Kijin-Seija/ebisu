@@ -132,7 +132,7 @@ it('拒绝相对路径越界、反斜杠、符号链接和无效 frontmatter', (
   symlinkSync(first.path, path.join(terminalRoot, 'skills'))
   expect(() => skills.install('sample-skill', 'claude')).toThrow('符号链接')
 })
-it('五种终端只安装轻量入口，卸载不删除中央脚本、经验或配置', () => {
+it('六种终端只安装轻量入口，卸载不删除中央脚本、经验或配置', () => {
   const result = create()
   const experience = skills.addExperience({
     skillId: result.id,
@@ -546,9 +546,9 @@ it('HTTP 技能接口认证、请求校验、并发修订与初始内容不可�
   ).toBe(400)
 })
 
-it('管理技能随五种集成绑定安装；旧绑定补齐且重复升级不改动配置', () => {
+it('管理技能随六种集成绑定安装；旧绑定补齐且重复升级不改动配置', () => {
   mkdirSync(path.join(root, 'bin'))
-  for (const binary of ['codex', 'claude', 'workbuddy', 'grok', 'qodercli'])
+  for (const binary of ['codex', 'claude', 'workbuddy', 'grok', 'qodercli', 'dsh'])
     writeFileSync(path.join(root, 'bin', binary), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
   for (const host of terminalIds) {
     store.saveManifest(host, null)

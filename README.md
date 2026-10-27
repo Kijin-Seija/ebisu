@@ -12,7 +12,7 @@
 
 - **项目总览**：Git 仓库与普通文件夹都能添加，不同 worktree 分别管理；长标题自动省略，悬停查看完整路径、分支与改动。
 - **会话状态**：执行中、等待输入、出现故障和空闲通过卡片边框与指示灯区分；头像、任务标题和完整会话 ID 就近查看。
-- **终端接入**：内置 Codex、WorkBuddy、Claude Code、Grok、Qoder 的规则、skill 与原生 hook 集成，安装前备份，卸载只清除 Ebisu 管理的配置。
+- **终端接入**：内置 Codex、WorkBuddy、Claude Code、Grok、Qoder、DeepSeek Harness 的规则、skill 与终端支持的原生 hook 集成，安装前备份，卸载只清除 Ebisu 管理的配置。
 - **技能管理**：中央保存技能文件，按终端安装轻量入口；查看带语法高亮的源文件、复制或导出文件，管理共享经验及全局、终端、项目三层变量。
 - **局域网互联**：手动配对自己的多台电脑，按设备查看项目、Git 和会话状态，浏览并按需导入技能包。
 - **桌面驻留**：托盘弹窗复用同一项目面板，关闭主窗口仅隐藏；支持跟随系统、浅色和深色主题。
@@ -79,17 +79,18 @@ pnpm package:mac
 
 ## 接入机制
 
-通知集成包含全局常驻规则、通知 skill 和原生生命周期 hook。skill 本身是模型按需调用的能力，不能提供强制执行保证，因此 hook 与规则共同补充。
+通知集成包含全局常驻规则、通知 skill 和终端支持的原生生命周期 hook。当前 DSH 没有可安装的用户级 hook，因此只安装规则与 skill，由模型主动上报。skill 本身是模型按需调用的能力，不能提供强制执行保证，因此 hook 与规则共同补充。
 
-| 终端        | 规则                                | Skill                                  | Hook 配置                    |
-| ----------- | ----------------------------------- | -------------------------------------- | ---------------------------- |
-| Codex       | `~/.codex/AGENTS.md` 标记块         | `~/.agents/skills/ebisu-codex/`        | `~/.codex/hooks.json`        |
-| WorkBuddy   | `~/.workbuddy/AGENTS.md` 标记块     | `~/.workbuddy/skills/ebisu-workbuddy/` | `~/.workbuddy/settings.json` |
-| Claude Code | `~/.claude/rules/ebisu-activity.md` | `~/.claude/skills/ebisu-claude/`       | `~/.claude/settings.json`    |
-| Grok        | `~/.grok/rules/ebisu-activity.md`   | `~/.grok/skills/ebisu-grok/`           | `~/.grok/hooks/ebisu.json`   |
-| Qoder       | `~/.qoder/AGENTS.md` 标记块         | `~/.qoder/skills/ebisu-qoder/`         | `~/.qoder/settings.json`     |
+| 终端             | 规则                                | Skill                                  | Hook 配置                    |
+| ---------------- | ----------------------------------- | -------------------------------------- | ---------------------------- |
+| Codex            | `~/.codex/AGENTS.md` 标记块         | `~/.agents/skills/ebisu-codex/`        | `~/.codex/hooks.json`        |
+| WorkBuddy        | `~/.workbuddy/AGENTS.md` 标记块     | `~/.workbuddy/skills/ebisu-workbuddy/` | `~/.workbuddy/settings.json` |
+| Claude Code      | `~/.claude/rules/ebisu-activity.md` | `~/.claude/skills/ebisu-claude/`       | `~/.claude/settings.json`    |
+| Grok             | `~/.grok/rules/ebisu-activity.md`   | `~/.grok/skills/ebisu-grok/`           | `~/.grok/hooks/ebisu.json`   |
+| Qoder            | `~/.qoder/AGENTS.md` 标记块         | `~/.qoder/skills/ebisu-qoder/`         | `~/.qoder/settings.json`     |
+| DeepSeek Harness | `~/.dsh/AGENTS.md` 标记块           | `~/.dsh/skills/ebisu-dsh/`             | 无原生 hook；模型主动上报    |
 
-安装前备份改动文件并增量合并 hook；卸载只清除 Ebisu 管理的配置。用户改写过的 skill 会被保留并报告冲突，不会直接覆盖。Codex 没有声明 hook 开关时添加带标记的开关，显式禁用时显示“能力受限”并保留用户选择。
+安装前备份改动文件并增量合并 hook；卸载只清除 Ebisu 管理的配置。用户改写过的 skill 会被保留并报告冲突，不会直接覆盖。Codex 没有声明 hook 开关时添加带标记的开关，显式禁用时显示“能力受限”并保留用户选择。DSH 不提供用户级生命周期 hook，设置页显示“能力受限”，由全局规则和 `ebisu-dsh` skill 主动上报；这不代表已取得原生事件保证。
 
 “检查”验证通知工具能否连接本机服务，不伪造会话。设置页按配置写入结果显示“已安装／未安装”，连通性通过“检查”单独确认。受终端版本、托管策略、沙箱和模型执行规则影响，上报可能缺失；不会用终端品牌猜测当前模型，也不会无限产生虚假心跳。
 

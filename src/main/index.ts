@@ -61,7 +61,7 @@ const terminalSchema = z.enum(terminalIds)
 const avatarSchema = z
   .string()
   .regex(
-    /^((model|tray):(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(codex|workbuddy|claude|grok|qoder))$/
+    /^((model|tray):(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(codex|workbuddy|claude|grok|qoder|dsh))$/
   )
 
 function changed(): void {

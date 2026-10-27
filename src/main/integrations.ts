@@ -140,7 +140,7 @@ export class Integrations {
 ## Ebisu 项目活动通知（始终适用）
 当本会话涉及本机文件夹（包括阅读、规划、执行）时，先调用通知 skill ebisu-${id}。
 使用本机终端工具执行 ${command} --session 本会话ID --path /绝对目录 --action enter，已注册目录及其子目录会被监控，其他目录自动忽略。
-同一会话的每次上报必须复用真实会话 ID；可用时通过 --session 传入。上报工具会自动读取宿主的会话环境变量（Codex 为 CODEX_THREAD_ID 或 CODEX_SESSION_ID），不要因为不知道真实 ID 就另造临时身份。模型已知时用 --model 传入真实模型名，未知时省略。
+同一会话的每次上报必须复用真实会话 ID；可用时通过 --session 传入。上报工具会自动读取宿主的会话环境变量（Codex 为 CODEX_THREAD_ID 或 CODEX_SESSION_ID，DeepSeek Harness 为 DSH_SESSION_ID），不要因为不知道真实 ID 就另造临时身份。模型已知时用 --model 传入真实模型名，未知时省略。
 需要获取上报 ID 时执行 ${command} --new-session；该命令优先返回宿主真实 ID，仅在确实缺失时生成 local- ID。只申请一次，保存并在本会话所有通知中用 --session 复用返回值，不要在不同会话之间共享，也不要将终端名或模型名用作会话 ID。已有 local- ID 时继续传入，原生工具 hook 会将该命令中的临时 ID 绑定到真实身份；不要自行换成另一个 ID。缺少 ID 的请求不会创建活动。
 在涉及其他目录前也执行 enter；执行中至少每两分钟重复 enter 刷新心跳，长时间命令前后也刷新。
 需要向用户提问或等待确认前，执行 enter 并加 --phase waiting；继续执行用 --phase executing。
@@ -456,7 +456,9 @@ ${end}`
               : '终端已显式禁用 hook；保留规则与 skill，未覆盖该设置'
             : !evidence.length
               ? '终端已移走；集成文件仍保留'
-              : '规则与 skill 已安装；此终端尚未验证原生 hook'
+              : adapters[id].hookSupport === 'none'
+                ? '规则与 skill 已安装；此终端没有原生 hook，依赖模型主动上报'
+                : '规则与 skill 已安装；此终端尚未验证原生 hook'
         } else if (
           row.lastSeen &&
           row.lastSeen >= manifest.installedAt &&

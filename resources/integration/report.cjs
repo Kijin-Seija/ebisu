@@ -7,6 +7,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const http = require('node:http')
 const crypto = require('node:crypto')
+const { homedir } = require('node:os')
 const { performance } = require('node:perf_hooks')
 
 /** 参数不经 eval 或 shell 展开，路径中的引号与命令替换只作为普通数据。 */
@@ -43,6 +44,8 @@ function environmentSession(terminal) {
       return process.env.WORKBUDDY_SESSION_ID || process.env.CODEBUDDY_SESSION_ID
     case 'claude':
       return process.env.CLAUDE_SESSION_ID
+    case 'dsh':
+      return process.env.DSH_SESSION_ID
     default:
       return undefined
   }
@@ -162,6 +165,30 @@ function request(runtime, method, route, data) {
     req.on('error', () => resolve(''))
     req.end(body)
   })
+}
+
+/**
+ * DSH 没有原生 hook，只能由模型主动调用上报命令；模型与标题从 DSH 会话投影缓存读取。
+ * 只读取 modelSelection 与 title 两个元数据字段，不读对话正文；显式参数仍然优先，
+ * 缓存缺失、格式变化或读取受限时静默省略，不影响活动上报。
+ */
+function dshSessionFacts(sessionId) {
+  // 会话 ID 直接拼接为文件名，必须先拒绝路径分隔符与空值。
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) return {}
+  try {
+    const home = process.env.DSH_HOME || path.join(homedir(), '.dsh')
+    const file = path.join(home, 'storages', 'session_projcache', 'sessions', `${sessionId}.json`)
+    const rows = JSON.parse(fs.readFileSync(file, 'utf8'))?.record?.rows
+    const selection = rows?.modelSelection?.val
+    const model = selection?.lastUsed?.model ?? selection?.pending?.model
+    const title = rows?.title?.val
+    return {
+      model: typeof model === 'string' && model.trim() ? model.trim().slice(0, 128) : undefined,
+      taskTitle: typeof title === 'string' && title.trim() ? title.trim().slice(0, 512) : undefined
+    }
+  } catch {
+    return {}
+  }
 }
 
 /** 将文件参数转换为所在目录；新文件逐级回溯到已存在的父目录。 */
@@ -310,14 +337,17 @@ async function main() {
   }
   // 微秒序号在启动进程之间可比较；不参与服务端超时计算。
   const sequence = Math.floor(performance.timeOrigin * 1000)
-  const rawModel = args.model || input.model
+  // DSH 的手动上报无法像原生 hook 一样携带模型；用会话投影补全，显式参数仍优先。
+  const dshFacts = terminal === 'dsh' ? dshSessionFacts(sessionId) : {}
+  const rawModel = args.model || input.model || dshFacts.model
   // 只接受宿主明确提供的标题字段；title/prompt/tool_input.title 不能代表会话自动标题。
   const rawTitle =
     args['task-title'] ||
     input.task_title ||
     input.taskTitle ||
     input.session_title ||
-    input.sessionTitle
+    input.sessionTitle ||
+    dshFacts.taskTitle
   const taskTitle =
     typeof rawTitle === 'string' ? rawTitle.trim().slice(0, 512) || undefined : undefined
   let index = 0

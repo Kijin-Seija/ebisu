@@ -914,6 +914,9 @@ button:focus-visible {
   padding: 0;
   font-size: 12px;
 }
+.avatar-option > span {
+  white-space: nowrap;
+}
 .avatar-option > div {
   position: relative;
   margin-bottom: 3px;
