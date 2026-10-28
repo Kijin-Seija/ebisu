@@ -529,8 +529,22 @@ it('HTTP 技能接口认证、请求校验、并发修订与初始内容不可�
   expect((await send('context', { skillId: result.id, path: first.path })).status).toBe(409)
   expect((await send('file-update', { skillId: result.id, content: 'overwrite' })).status).toBe(404)
   const experience = await (
-    await send('experience-add', { skillId: result.id, content: '经验', evidence: '验证' })
+    await send('experience-add', {
+      skillId: result.id,
+      path: first.path,
+      content: '经验',
+      evidence: '验证'
+    })
   ).json()
+  expect(experience.folderId).toBe(first.id)
+  expect(
+    (await send('experience-add', {
+      skillId: result.id,
+      path: path.join(root, 'unregistered'),
+      content: '不应降级为全局',
+      evidence: '验证'
+    })).status
+  ).toBe(404)
   const updates = await Promise.all([
     send('experience-update', {
       id: experience.id,

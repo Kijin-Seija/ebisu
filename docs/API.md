@@ -80,7 +80,7 @@ HTTP 400 为 JSON 或参数错误，401 为认证或 Origin 被拒绝，404 为�
 | run-context         | skillId, path                                  | 客户端执行器专用；包含敏感变量，不打印                                    |
 | file                | skillId, file（包内文本路径）                  | `{content:string}`，宿主占位符已渲染                                      |
 | experiences         | ids（1–100 个 UUID）                           | SkillExperience[]，缺失 ID 返回 404                                       |
-| experience-add      | skillId, content, evidence, folderId?          | 新经验，含 UUID、revision、时间                                           |
+| experience-add      | skillId, content, evidence, folderId?, path?   | 新经验，含 UUID、revision、时间；提供 path 时由路径解析当前项目，未匹配项目返回 404 |
 | experience-update   | id, revision, content, evidence                | 同 ID 的更新经验                                                          |
 | experience-delete   | id, revision                                   | `{ok:true}`                                                               |
 | variables           | skillId, folderId?                             | 按全局、已安装终端、当前项目分层的 VariableView[]，敏感值只返回是否已设置 |

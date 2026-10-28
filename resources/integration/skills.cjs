@@ -15,8 +15,8 @@ Usage: skills --terminal <codex|workbuddy|claude|grok|qoder|dsh> <command> [opti
   file --skill <id|name> --file <relative-text-file>
   run --skill <id|name> --path <current-directory> --script scripts/file -- [args...]
   experiences --ids '<JSON id[]>'
-  experience-add --data <JSON file|->
-    {skillId,folderId?:existing-project-id,content,evidence}
+  experience-add [--path <current-directory>] [--scope skill] --data <JSON file|->
+    {skillId,folderId?:existing-project-id,content,evidence}; defaults to process.cwd() project scope; --scope skill creates a global experience
   experience-update --id <id> --revision <n> --data <JSON file|->
     {content,evidence}; ID remains unchanged, stale revision returns 409.
   experience-delete --id <id> --revision <n>
@@ -145,9 +145,13 @@ async function main() {
     case 'experiences':
       result = await request('experiences', { ids: JSON.parse(opts.ids || '[]') })
       break
-    case 'experience-add':
-      result = await request('experience-add', data())
+    case 'experience-add': {
+      const payload = data()
+      if (payload.folderId === undefined && opts.scope !== 'skill')
+        payload.path = opts.path || process.cwd()
+      result = await request('experience-add', payload)
       break
+    }
     case 'experience-update':
       result = await request('experience-update', {
         ...data(),
