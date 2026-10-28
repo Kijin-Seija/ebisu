@@ -23,6 +23,7 @@ import {
 } from 'lucide-vue-next'
 import { useDashboard } from './store'
 import Dashboard from './components/Dashboard.vue'
+import DeviceFilter from './components/DeviceFilter.vue'
 import Settings from './components/Settings.vue'
 import Skills from './components/Skills.vue'
 import StoneMark from './components/StoneMark.vue'
@@ -177,6 +178,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
                 <template v-if="page === 'projects'">
                   <div v-if="!trayMode" class="page-heading project-heading">
                     <h1>项目面板<span class="title-period">.</span></h1>
+                    <DeviceFilter />
                     <div class="heading-actions"><RefreshButton /><AddButton /></div>
                   </div>
                   <Dashboard :tray-mode="trayMode" :dark="dark" />

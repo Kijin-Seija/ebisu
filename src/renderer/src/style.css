@@ -368,6 +368,20 @@ button:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 远程主机名与项目标题同行；标题优先占位，主机名限宽后省略，全名由 tooltip 展示。 */
+.device-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
 .icon-button {
   border: 0;
   color: var(--secondary);
@@ -1463,6 +1477,13 @@ button:focus-visible {
   width: 240px;
   max-width: 100%;
   margin: 0 0 16px;
+}
+/* 主窗口的设备筛选器并入页面标题行，紧贴标题右侧，把操作按钮推到最右。 */
+.project-heading .device-filter {
+  -webkit-app-region: no-drag;
+  width: 200px;
+  flex: 0 1 auto;
+  margin: 0 auto 0 0;
 }
 .device-origin {
   color: var(--text-secondary, #8b7c86);

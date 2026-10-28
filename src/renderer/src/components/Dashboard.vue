@@ -7,11 +7,19 @@ import {
   NModal,
   NPopover,
   NTag,
+  NTooltip,
   useDialog,
   useMessage,
   useThemeVars
 } from 'naive-ui'
-import { Folder, FolderPlus, GitBranch, MoreHorizontal, CircleCheck } from 'lucide-vue-next'
+import {
+  Folder,
+  FolderPlus,
+  GitBranch,
+  MoreHorizontal,
+  CircleCheck,
+  Network
+} from 'lucide-vue-next'
 import { useDashboard } from '../store'
 import { backgroundUrl, modelFamily, trayBackgroundUrl } from '../avatars'
 import type { FolderView, SessionActivity } from '../../../shared/types'
@@ -181,7 +189,8 @@ const menu = [
 </script>
 
 <template>
-  <DeviceFilter />
+  <!-- 主窗口的设备筛选器已并入页面标题行，托盘没有标题行，仍留在面板顶部。 -->
+  <DeviceFilter v-if="trayMode" />
   <div class="grid-toolbar">
     <div class="filter-tabs">
       <button
@@ -246,7 +255,7 @@ const menu = [
         <n-popover trigger="hover" placement="bottom-start" :delay="200" :width="340">
           <template #trigger>
             <button class="folder-symbol" :aria-label="`查看 ${folder.name} 项目详情`">
-              <Folder :size="18" :stroke-width="1.5" />
+              <component :is="folder.remote ? Network : Folder" :size="18" :stroke-width="1.5" />
             </button>
           </template>
           <div class="folder-details detail-panel">
@@ -283,6 +292,12 @@ const menu = [
           </div>
         </n-popover>
         <h2 class="card-project-name">{{ folder.name }}</h2>
+        <n-tooltip v-if="folder.remote" trigger="hover" placement="top">
+          <template #trigger>
+            <span class="device-name">{{ folder.deviceName }}</span>
+          </template>
+          {{ folder.deviceName }}
+        </n-tooltip>
         <SessionAvatars
           v-if="trayMode && folder.sessions.length"
           class="tray-session-avatars"
@@ -297,12 +312,6 @@ const menu = [
           ><button class="icon-button" :aria-label="`${folder.name} 操作`">
             <MoreHorizontal :size="18" /></button
         ></n-dropdown>
-      </div>
-      <div v-if="folder.remote" class="device-origin">
-        {{ folder.deviceName }} · {{ folder.online ? '在线' : '离线'
-        }}<span v-if="folder.lastSeen">
-          · 更新于 {{ new Date(folder.lastSeen).toLocaleTimeString() }}</span
-        >
       </div>
       <div class="card-meta">
         <div v-if="!folder.available" class="folder-warning">目录不可访问</div>
