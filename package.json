@@ -20,11 +20,13 @@
   "dependencies": {
     "@iarna/toml": "^2.2.5",
     "better-sqlite3": "^12.4.1",
+    "bonjour-service": "^1.4.4",
     "chokidar": "^4.0.3",
     "highlight.js": "11.12.0",
     "lucide-vue-next": "^0.468.0",
     "naive-ui": "^2.43.1",
     "pinia": "^3.0.3",
+    "selfsigned": "^3.0.1",
     "vue": "^3.5.22",
     "zod": "^4.1.12"
   },

@@ -1,12 +1,6 @@
-import type { TerminalId } from '../shared/types'
+import { terminalNames, type TerminalId } from '../shared/types'
 
-export const terminalNames: Record<TerminalId, string> = {
-  codex: 'Codex',
-  workbuddy: 'WorkBuddy',
-  claude: 'Claude Code',
-  grok: 'Grok',
-  qoder: 'Qoder'
-}
+export { terminalNames }
 interface Adapter {
   commands: string[]
   apps: string[]
@@ -14,6 +8,8 @@ interface Adapter {
   skillRoot: string
   rule: string
   hookFile?: string
+  /** 终端不提供可安装的生命周期 hook 时只能依赖规则与 skill 主动上报。 */
+  hookSupport?: 'native' | 'none'
   events: string[]
 }
 /** 不把 Claude 桌面聊天应用误识别成 Claude Code；后者需 CLI 或其专用应用。 */
@@ -110,5 +106,16 @@ export const adapters: Record<TerminalId, Adapter> = {
       'Elicitation',
       'ElicitationResult'
     ]
+  },
+  // DSH 0.2.1-rc.3 读取 ~/.dsh/AGENTS.md 与 ~/.dsh/skills，但没有可安装的用户级
+  // 生命周期 hook；因此只安装规则和 skill，由模型按规则主动上报，不伪造原生事件。
+  dsh: {
+    commands: ['dsh'],
+    apps: ['DeepSeek Harness.app'],
+    root: '.dsh',
+    skillRoot: '.dsh/skills',
+    rule: '.dsh/AGENTS.md',
+    hookSupport: 'none',
+    events: []
   }
 }

@@ -1,6 +1,17 @@
+import type { DeviceApi } from './lan'
+
 /** 终端标识固定为协议值，不能由用户显示名称推断。 */
-export const terminalIds = ['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const
+export const terminalIds = ['codex', 'workbuddy', 'claude', 'grok', 'qoder', 'dsh'] as const
 export type TerminalId = (typeof terminalIds)[number]
+/** 显示名称只用于界面；协议、配置目录和 skill 名称始终使用终端标识。 */
+export const terminalNames: Record<TerminalId, string> = {
+  codex: 'Codex',
+  workbuddy: 'WorkBuddy',
+  claude: 'Claude Code',
+  grok: 'Grok',
+  qoder: 'Qoder',
+  dsh: 'DeepSeek Harness'
+}
 export type ModelFamily = 'gpt' | 'claude' | 'deepseek' | 'kimi' | 'qwen' | 'gemini' | 'grok'
 export const activityPhases = ['executing', 'waiting', 'error'] as const
 export type ActivityPhase = (typeof activityPhases)[number]
@@ -23,6 +34,8 @@ export interface ActivityRequest {
   preserveWaiting?: boolean
 }
 export interface SessionActivity {
+  /** 远端视图专用，禁止把它当成本机深链会话打开。 */
+  remoteDeviceId?: string
   terminal: TerminalId
   sessionId: string
   phase: ActivityPhase
@@ -65,6 +78,7 @@ export interface Settings {
   avatars: Partial<Record<AvatarKey, string>>
 }
 export interface Snapshot {
+  lan?: import('./lan').LanView
   skills: import('./skills').SkillSummary[]
   folders: FolderView[]
   integrations: IntegrationView[]
@@ -72,7 +86,7 @@ export interface Snapshot {
   service: { running: boolean; port: number; error?: string }
 }
 /** preload 只公开业务操作，不向网页暴露通用 IPC、文件或命令执行能力。 */
-export interface EbisuApi {
+export interface EbisuApi extends DeviceApi {
   skillDetail(id: string): Promise<import('./skills').SkillDetail>
   skillFilePath(id: string, relative: string): Promise<string>
   revealSkillFile(id: string, relative: string): Promise<void>

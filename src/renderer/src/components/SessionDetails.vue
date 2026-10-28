@@ -1,23 +1,16 @@
 <script setup lang="ts">
 import { NButton, NTag, NTooltip, useMessage } from 'naive-ui'
 import { Copy, ExternalLink } from 'lucide-vue-next'
-import type { SessionActivity } from '../../../shared/types'
+import { terminalNames, type SessionActivity } from '../../../shared/types'
 
 defineProps<{ session: SessionActivity }>()
 const message = useMessage()
-const names = {
-  codex: 'Codex',
-  workbuddy: 'WorkBuddy',
-  claude: 'Claude Code',
-  grok: 'Grok',
-  qoder: 'Qoder'
-}
 const phaseTypes = { executing: 'info', waiting: 'warning', error: 'error' } as const
 const phaseLabels = { executing: '执行中', waiting: '问题待确认', error: '出现故障' } as const
 
 /** Codex 会话 ID 同时是桌面深链的 thread ID；其他终端暂不提供跳转按钮。 */
 async function openSession(session: SessionActivity): Promise<void> {
-  if (session.terminal !== 'codex') return
+  if (session.terminal !== 'codex' || session.remoteDeviceId) return
   try {
     await window.ebisu.openSession(session.terminal, session.sessionId)
   } catch (error) {
@@ -40,8 +33,8 @@ async function copyId(id: string): Promise<void> {
   <div class="session-details detail-panel">
     <div class="detail-session-heading">
       <div class="detail-session-name">
-        <strong>{{ names[session.terminal] }}</strong>
-        <n-tooltip v-if="session.terminal === 'codex'">
+        <strong>{{ terminalNames[session.terminal] }}</strong>
+        <n-tooltip v-if="session.terminal === 'codex' && !session.remoteDeviceId">
           <template #trigger>
             <n-button
               text

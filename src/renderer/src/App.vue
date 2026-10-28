@@ -41,7 +41,7 @@ const dark = computed(
     dashboard.snapshot?.settings.theme === 'dark' ||
     (dashboard.snapshot?.settings.theme !== 'light' && systemDark.value)
 )
-const folders = computed(() => dashboard.snapshot?.folders ?? [])
+const folders = computed(() => dashboard.views.folders)
 let unsubscribe: (() => void) | undefined
 onMounted(() => {
   void dashboard.refresh()
@@ -131,7 +131,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
               </button>
               <button :class="{ active: page === 'skills' }" @click="page = 'skills'">
                 <BookOpen :size="18" />技能列表<span class="nav-count">{{
-                  dashboard.snapshot?.skills.length ?? 0
+                  dashboard.views.skills.length
                 }}</span>
               </button>
               <button :class="{ active: page === 'settings' }" @click="page = 'settings'">

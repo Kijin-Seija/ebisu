@@ -219,6 +219,20 @@ export class Skills {
         .all(row.id) as SkillExperience[]
     }
   }
+  /** 导出只有可移植的源包；文件被外部改写时拒绝传播，不读取经验或任何变量取值。 */
+  exportPackage(id: string): { skillId: string; package: SkillPackage } {
+    const row = this.row(id)
+    const pkg = JSON.parse(row.package) as SkillPackage
+    for (const [relative, file] of Object.entries(pkg.files)) {
+      const current = readFileSync(safeFile(this.directory(row), relative))
+      if (digest(current) !== digest(Buffer.from(file.content, file.encoding ?? 'utf8')))
+        throw new SkillError(409, '技能源文件已被外部修改，无法导出')
+    }
+    pkg.variables = this.definitions(row.id).map(
+      ({ defaultValue: _default, ...definition }) => definition
+    )
+    return { skillId: row.id, package: pkg }
+  }
   /** 返回技能源文件的绝对路径和字节内容，供复制路径、另存为和定位文件使用。 */
   sourceFile(id: string, relative: string): { path: string; name: string; content: Buffer } {
     const row = this.row(id)
@@ -361,7 +375,7 @@ export class Skills {
   }
   private entry(row: SkillRow, terminal: TerminalId): string {
     const client = `${quote(this.options.client)} --terminal ${terminal}`
-    return `---\nname: ${row.name}\ndescription: ${JSON.stringify(row.description)}\n${terminal === 'workbuddy' ? 'agent_created: true\n' : ''}---\n\n# ${row.name}\n\n本技能的唯一源文件位于 ${this.directory(row)}。此目录中的内容为不可变初始上下文和工具，不要直接修改，也不要把项目配置写进入口。\n\n开始使用时，通过终端执行：\n\n\`\`\`sh\n${client} context --skill ${row.id} --path "$PWD"\n\`\`\`\n\n读取返回的 instructions、技能经验及当前项目经验后执行任务。参考资料通过 ${client} file --skill ${row.id} --file references/文件名 读取。运行脚本通过 ${client} run --skill ${row.id} --path "$PWD" --script scripts/脚本名 -- 参数；变量只注入该子进程。服务不可用时明确报告，不使用过期配置执行相关脚本。\n\n完成后，可将本次实际验证且值得复用的经验用 experience-add 写入；必须提供验证依据。项目专属经验带 folderId，通用经验不带 folderId。不得把推测、密钥、任务流水账或初始上下文副本记录为经验。修改/删除已有经验使用其 ID 和当前 revision；讨论指定经验时使用 ebisu-skill-discuss。\n\n用 ${client} protocol 查看接口、参数与示例。\n`
+    return `---\nname: ${row.name}\ndescription: ${JSON.stringify(row.description)}\n${terminal === 'workbuddy' ? 'agent_created: true\n' : ''}---\n\n# ${row.name}\n\n本技能的唯一源文件位于 ${this.directory(row)}。此目录中的内容为不可变初始上下文和工具，不要直接修改，也不要把项目配置写进入口。\n\n开始使用时，通过终端执行：\n\n\`\`\`sh\n${client} context --skill ${row.id} --path "$PWD"\n\`\`\`\n\n读取返回的 instructions、技能经验及当前项目经验后执行任务。参考资料通过 ${client} file --skill ${row.id} --file references/文件名 读取。运行脚本通过 ${client} run --skill ${row.id} --path "$PWD" --script scripts/脚本名 -- 参数；变量只注入该子进程。服务不可用时明确报告，不使用过期配置执行相关脚本。\n\n经验沉淀是持久化动作，不是对话层面的“记住”：当用户说“记住”“以后都这样”“默认遵循”、明确提出长期规范/偏好，或本次验证得到值得复用的规则时，必须先成功执行 experience-add，再向用户确认已记住；如果写入失败，必须报告失败，不能只口头承诺。默认把当前项目路径传给 experience-add --path "$PWD"，由服务端写入当前项目经验；只有用户明确要求所有项目通用时才使用 experience-add --scope skill。未注册的当前路径不能静默降级为全局经验。用户明确指定的规范可以用该用户指令作为 evidence；模型自行总结的规则必须有实际验证依据。两类经验都不得记录推测、凭据或单纯任务流水账。修改/删除已有经验使用其 ID 和当前 revision；讨论指定经验时使用 ebisu-skill-discuss。\n\n用 ${client} protocol 查看接口、参数与示例。\n`
   }
   install(id: string, terminal: TerminalId): void {
     this.assertTerminal(terminal)
@@ -471,6 +485,16 @@ export class Skills {
       .run(id, skillId, data.folderId ?? null, data.content, data.evidence, at, at)
     return this.experiences([id])[0]
   }
+  /** 根据调用方当前目录解析最深的已注册项目，避免模型手动猜测项目 ID。 */
+  projectIdForPath(directory: string): string | undefined {
+    let canonical: string
+    try {
+      canonical = canonicalDirectory(directory)
+    } catch {
+      throw new SkillError(404, '项目工作目录不存在或不可访问')
+    }
+    return deepestFolder(this.store.folders(), canonical)?.id
+  }
   experiences(ids: string[]): SkillExperience[] {
     z.array(z.string().uuid()).min(1).max(100).parse(ids)
     return ids.map((id) => {
@@ -559,7 +583,11 @@ export class Skills {
       .get(skillId, name, scope, owner) as ValueRow | undefined
   }
   /** 读取全局、已安装终端和指定项目的独立取值；敏感值只在显式读取时解密。 */
-  variables(id: string, folderId: string | null = null, reveal: boolean | string = false): VariableView[] {
+  variables(
+    id: string,
+    folderId: string | null = null,
+    reveal: boolean | string = false
+  ): VariableView[] {
     const row = this.row(id)
     const projectId = folderId === null ? null : z.string().uuid().parse(folderId)
     if (projectId && !this.store.folders().some((folder) => folder.id === projectId))

@@ -3,7 +3,14 @@ import { computed, ref } from 'vue'
 import { NButton, NSelect, NTooltip, useDialog, useMessage } from 'naive-ui'
 import { RefreshCw, Download, Trash2, ImagePlus, Info } from 'lucide-vue-next'
 import { useDashboard } from '../store'
-import type { AvatarKey, IntegrationView, Settings } from '../../../shared/types'
+import LanSettings from './LanSettings.vue'
+import {
+  terminalIds,
+  terminalNames,
+  type AvatarKey,
+  type IntegrationView,
+  type Settings
+} from '../../../shared/types'
 
 const dashboard = useDashboard()
 const api = window.ebisu
@@ -28,15 +35,10 @@ const avatarItems: { key: AvatarKey; label: string }[] = [
       grok: 'Grok'
     }[key]
   })),
-  ...(['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const).map((key) => ({
+  ...terminalIds.map((key) => ({
     key: `terminal:${key}` as AvatarKey,
-    label: {
-      codex: 'Codex',
-      workbuddy: 'WorkBuddy',
-      claude: 'Claude Code',
-      grok: 'Grok',
-      qoder: 'Qoder'
-    }[key]
+    // 头像格子空间有限，DSH 使用短名称，避免折行；其他界面仍显示完整名称。
+    label: key === 'dsh' ? 'DSH' : terminalNames[key]
   }))
 ]
 const allAvatarItems = [
@@ -82,10 +84,14 @@ function uninstall(item: IntegrationView): void {
 </script>
 
 <template>
+  <LanSettings />
   <div class="section-heading integration-heading">
     <h2>终端集成</h2>
     <div class="section-actions">
-      <span class="section-meta">{{ installedCount }} / 5 已安装</span>
+      <span class="section-meta"
+        >{{ installedCount }} /
+        {{ dashboard.snapshot?.integrations.length ?? terminalIds.length }} 已安装</span
+      >
       <n-button
         :loading="pending === 'rescan'"
         :disabled="!!pending"

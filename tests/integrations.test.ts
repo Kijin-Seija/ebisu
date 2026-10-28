@@ -88,7 +88,8 @@ function bridge(
       'CODEBUDDY_SESSION_ID',
       'QODER_PROJECT_DIR',
       'QODER_SESSION_ID',
-      'CLAUDE_SESSION_ID'
+      'CLAUDE_SESSION_ID',
+      'DSH_SESSION_ID'
     ])
       delete env[key]
     const child = spawn(integrations.bridge, args, {
@@ -116,6 +117,16 @@ it('Qoder 只有配置残留时不算已安装；可执行文件与应用均可�
   mkdirSync(path.join(apps, 'WorkBuddy.app/Contents'), { recursive: true })
   writeFileSync(path.join(apps, 'WorkBuddy.app/Contents/Info.plist'), '<plist/>')
   expect(integrations.detect('workbuddy')).toContain(path.join(apps, 'WorkBuddy.app'))
+})
+it('DSH 只有配置残留时不算已安装；CLI 与应用均可作为安装证据', () => {
+  file('.dsh/AGENTS.md', 'residual')
+  expect(integrations.detect('dsh')).toEqual([])
+  expect(() => integrations.install('dsh')).toThrow('尚未安装')
+  binary('dsh')
+  expect(integrations.detect('dsh')).toContain(path.join(bin, 'dsh'))
+  mkdirSync(path.join(apps, 'DeepSeek Harness.app/Contents'), { recursive: true })
+  writeFileSync(path.join(apps, 'DeepSeek Harness.app/Contents/Info.plist'), '<plist/>')
+  expect(integrations.detect('dsh')).toContain(path.join(apps, 'DeepSeek Harness.app'))
 })
 it('上报宿主的真实任务标题，手动参数可更新，不能把工具标题或提示词当任务', async () => {
   integrations.prepareBridge()
@@ -353,7 +364,7 @@ it('被用户修改的 skill 不会被卸载或重新安装覆盖', () => {
   expect(() => integrations.install('grok')).toThrow('已有同名')
   expect(text('.grok/skills/ebisu-grok/SKILL.md')).toBe('用户改写')
 })
-it('五种终端完成真实 wrapper→HTTP→SQLite 通知链路；检查不伪造健康', async () => {
+it('五种原生 hook 终端完成真实 wrapper→HTTP→SQLite 通知链路；检查不伪造健康', async () => {
   const folder = store.addFolder(root)
   server = await startServer(store, path.join(data, 'runtime.json'), () => {})
   for (const terminal of ['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const) {
@@ -666,4 +677,95 @@ it('Qoder 安装夹具可安装并卸载全局规则、skill 与文档支持的 
   expect(JSON.parse(text('.qoder/settings.json')).hooks.PermissionRequest).toHaveLength(1)
   integrations.uninstall('qoder')
   expect(text('.qoder/AGENTS.md').trim()).toBe('')
+})
+it('DSH 只安装规则与 skill，不伪造原生 hook；能力受限时仍可检查本机链路', async () => {
+  binary('dsh')
+  integrations.install('dsh')
+  expect(text('.dsh/AGENTS.md')).toContain('--terminal dsh')
+  expect(text('.dsh/AGENTS.md')).toContain('DSH_SESSION_ID')
+  expect(text('.dsh/skills/ebisu-dsh/SKILL.md')).toContain('name: ebisu-dsh')
+  expect(text('.dsh/skills/ebisu-skill-create/SKILL.md')).toContain('.ebisu/management/')
+  expect(existsSync(path.join(home, '.dsh/hooks.json'))).toBe(false)
+  const view = integrations.views().find((item) => item.id === 'dsh')
+  expect(view?.health).toBe('limited')
+  expect(view?.detail).toContain('没有原生 hook')
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  expect(await integrations.check('dsh')).toContain('本机通知链路正常')
+  integrations.uninstall('dsh')
+  expect(text('.dsh/AGENTS.md').trim()).toBe('')
+  expect(existsSync(path.join(home, '.dsh/skills/ebisu-dsh/SKILL.md'))).toBe(false)
+})
+it('DSH_SESSION_ID 下申请 ID 与手动上报共用真实身份，waiting 和退出生效', async () => {
+  const folder = store.addFolder(root)
+  integrations.prepareBridge()
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  const env = { DSH_SESSION_ID: 'real-dsh-session' }
+  expect(await bridge(['--terminal', 'dsh', '--new-session'], {}, env)).toBe('real-dsh-session')
+  await bridge(
+    ['--terminal', 'dsh', '--path', root, '--action', 'enter', '--phase', 'waiting'],
+    {},
+    env
+  )
+  expect(store.sessions(folder.id)).toMatchObject([
+    { terminal: 'dsh', sessionId: 'real-dsh-session', phase: 'waiting' }
+  ])
+  await bridge(
+    ['--terminal', 'dsh', '--path', root, '--action', 'exit', '--scope', 'session'],
+    {},
+    env
+  )
+  expect(store.sessions(folder.id)).toHaveLength(0)
+})
+it('DSH 手动上报从会话投影补全当前模型与标题，显式参数优先', async () => {
+  const folder = store.addFolder(root)
+  integrations.prepareBridge()
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  const dshHome = path.join(root, 'dsh-home')
+  const cache = path.join(dshHome, 'storages/session_projcache/sessions/session-facts.json')
+  mkdirSync(path.dirname(cache), { recursive: true })
+  writeFileSync(
+    cache,
+    JSON.stringify({
+      record: {
+        rows: {
+          modelSelection: {
+            val: { lastUsed: { provider: 'deepseek-account', model: 'deepseek-flash' } }
+          },
+          title: { val: '修复 dsh 与 ebisu 状态同步问题' }
+        }
+      }
+    })
+  )
+  const env = { DSH_SESSION_ID: 'session-facts', DSH_HOME: dshHome }
+  await bridge(
+    ['--terminal', 'dsh', '--path', root, '--action', 'enter', '--phase', 'executing'],
+    {},
+    env
+  )
+  expect(store.sessions(folder.id)[0]).toMatchObject({
+    model: 'deepseek-flash',
+    taskTitle: '修复 dsh 与 ebisu 状态同步问题'
+  })
+  await bridge(
+    [
+      '--terminal',
+      'dsh',
+      '--path',
+      root,
+      '--action',
+      'enter',
+      '--phase',
+      'executing',
+      '--model',
+      'deepseek-reasoner',
+      '--task-title',
+      '显式标题'
+    ],
+    {},
+    env
+  )
+  expect(store.sessions(folder.id)[0]).toMatchObject({
+    model: 'deepseek-reasoner',
+    taskTitle: '显式标题'
+  })
 })

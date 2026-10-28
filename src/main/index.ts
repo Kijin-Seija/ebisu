@@ -25,6 +25,7 @@ import { startServer } from './server'
 import { Integrations } from './integrations'
 import { TaskTitles } from './task-titles'
 import { Skills, SkillError, targetSchema } from './skills'
+import { Lan } from './lan'
 import { terminalIds, type AvatarKey, type GitStatus, type Snapshot } from '../shared/types'
 
 // 自定义 scheme 仅提供白名单头像，不把完整文件系统暴露给 renderer。
@@ -45,6 +46,7 @@ let store: Store
 let integrations: Integrations
 let taskTitles: TaskTitles
 let skills: Skills
+let lan: Lan
 let service: Awaited<ReturnType<typeof startServer>> | undefined
 let serviceError: string | undefined
 let watcher: FSWatcher | undefined
@@ -59,7 +61,7 @@ const terminalSchema = z.enum(terminalIds)
 const avatarSchema = z
   .string()
   .regex(
-    /^((model|tray):(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(codex|workbuddy|claude|grok|qoder))$/
+    /^((model|tray):(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(codex|workbuddy|claude|grok|qoder|dsh))$/
   )
 
 function changed(): void {
@@ -122,6 +124,7 @@ async function snapshot(): Promise<Snapshot> {
     }))
   )
   return {
+    lan: lan?.view(),
     folders,
     skills: skills.list(),
     integrations: integrations.views(),
@@ -237,6 +240,33 @@ function handle(channel: string, callback: (...args: any[]) => unknown): void {
 }
 
 function installIpc(): void {
+  handle('configure-lan', (enabled: unknown, name: unknown) =>
+    lan.configure(z.boolean().parse(enabled), z.string().parse(name))
+  )
+  handle('create-invitation', (address: unknown) =>
+    lan.invitationString(z.string().optional().parse(address))
+  )
+  handle('pair-device', (invitation: unknown, address: unknown) =>
+    lan.pair(z.string().parse(invitation), z.string().optional().parse(address))
+  )
+  handle('unpair-device', (id: unknown) => lan.unpair(z.string().uuid().parse(id)))
+  handle('remote-skill', (device: unknown, skill: unknown) =>
+    lan.remoteSkill(z.string().uuid().parse(device), z.string().uuid().parse(skill))
+  )
+  handle('prepare-import', (device: unknown, skill: unknown) =>
+    lan.prepareImport(z.string().uuid().parse(device), z.string().uuid().parse(skill))
+  )
+  handle('confirm-import', (draft: unknown, edit: unknown) => {
+    const id = lan.transfer.confirm(
+      z.string().uuid().parse(draft),
+      z
+        .object({ name: z.string(), texts: z.record(z.string(), z.string()) })
+        .strict()
+        .parse(edit)
+    )
+    changed()
+    return id
+  })
   handle('snapshot', snapshot)
   handle('skill-detail', (id: unknown) => skills.detail(z.string().parse(id)))
   handle(
@@ -421,6 +451,15 @@ async function boot(): Promise<void> {
       ? path.join(integrations.home, '.codex')
       : process.env.CODEX_HOME || path.join(integrations.home, '.codex')
   )
+  lan = new Lan(store, skills, {
+    directory: dataDirectory,
+    changed,
+    snapshot: async () => {
+      const local = await snapshot()
+      return { folders: local.folders, skills: local.skills }
+    }
+  })
+  await lan.initialize()
   nativeTheme.themeSource = store.settings().theme
   protocol.handle('ebisu-asset', async (request) => {
     const url = new URL(request.url)
@@ -525,6 +564,7 @@ async function boot(): Promise<void> {
     if (store.expire()) changed()
   }, 1000)
   powerMonitor.on('resume', () => {
+    void lan.resume().catch((error) => console.warn('恢复局域网共享失败:', String(error)))
     store.expire()
     void refreshGit()
     changed()
@@ -577,7 +617,7 @@ else {
     void (async () => {
       try {
         // 并行停止相互独立的资源，避免慢 Git 查询阻止 HTTP 服务及运行信息的释放。
-        await Promise.all([watcher?.close(), refreshing, service?.close()])
+        await Promise.all([watcher?.close(), refreshing, service?.close(), lan?.close()])
       } catch (error) {
         console.warn('退出时资源清理失败:', String(error))
       } finally {

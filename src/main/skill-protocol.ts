@@ -35,13 +35,20 @@ export function skillRequest(skills: Skills, action: string, input: unknown): un
       return { content: skills.file(id(), base.terminal, z.string().max(1024).parse(data.file)) }
     case 'experiences':
       return skills.experiences(z.array(z.string().uuid()).parse(data.ids))
-    case 'experience-add':
+    case 'experience-add': {
+      const hasPath = data.folderId === undefined && data.path !== undefined
+      const folderId =
+        data.folderId === undefined && data.path !== undefined
+          ? skills.projectIdForPath(z.string().parse(data.path))
+          : data.folderId
+      if (hasPath && folderId === undefined) throw new SkillError(404, '当前路径未注册项目')
       return skills.addExperience({
         skillId: id(),
-        ...(data.folderId === undefined ? {} : { folderId: data.folderId }),
+        ...(folderId === undefined ? {} : { folderId }),
         content: data.content,
         evidence: data.evidence
       })
+    }
     case 'experience-update':
       return skills.updateExperience(
         z.string().uuid().parse(data.id),

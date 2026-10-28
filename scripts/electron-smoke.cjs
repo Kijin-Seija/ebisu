@@ -745,7 +745,7 @@ async function main() {
       '14px'
     )
     await window.locator('.preference-heading').click()
-    assert.equal(await window.locator('.integration-row').count(), 5)
+    assert.equal(await window.locator('.integration-row').count(), 6)
     const detection = await window.evaluate(async () =>
       (await window.ebisu.snapshot()).integrations.map(({ id, detected, evidence }) => ({
         id,
@@ -761,13 +761,14 @@ async function main() {
         `${id} should be detected`
       )
     // 用户可在开发期间安装终端；实机结果跟随实际状态，未安装分支另有隔离测试。
-    assert.equal(
-      await window
-        .locator('[data-terminal="qoder"]')
-        .getByRole('button', { name: '安装集成' })
-        .isDisabled(),
-      !detection.find((item) => item.id === 'qoder').detected
-    )
+    for (const id of ['qoder', 'dsh'])
+      assert.equal(
+        await window
+          .locator(`[data-terminal="${id}"]`)
+          .getByRole('button', { name: '安装集成' })
+          .isDisabled(),
+        !detection.find((item) => item.id === id).detected
+      )
     await window
       .locator('[data-terminal="codex"]')
       .getByRole('button', { name: '安装集成' })
@@ -1127,7 +1128,9 @@ async function main() {
     rmSync(fixture, { recursive: true, force: true })
   }
 }
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+main()
+  .then(() => require('./lan-smoke.cjs')())
+  .catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })

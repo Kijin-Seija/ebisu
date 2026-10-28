@@ -2,9 +2,9 @@
   <img src="resources/icon.png" width="112" height="112" alt="Ebisu 垒石图标" />
 </p>
 <h1 align="center">Ebisu</h1>
-<p align="center">本地项目、Agent 会话与技能管理面板</p>
+<p align="center">本地与局域网项目、Agent 会话及技能管理面板</p>
 
-把常驻的项目收进一个安静的面板：随时看到 Git 状态、哪些 agent 正在协作、哪些会话在等你处理，并集中管理跨终端使用的技能、经验与变量。使用 Electron、TypeScript、Vue 3、Pinia、Naive UI 和 SQLite，首期面向 macOS Apple Silicon。
+把常驻的项目收进一个安静的面板：随时看到 Git 状态、哪些 agent 正在协作、哪些会话在等你处理，并集中管理跨终端使用的技能、经验与变量。可选开启局域网共享，在配对电脑间汇总状态并手动导入技能。使用 Electron、TypeScript、Vue 3、Pinia、Naive UI 和 SQLite，首期面向 macOS Apple Silicon。
 
 文档：[本机接口协议](docs/API.md) · [终端适配与验收边界](docs/INTEGRATIONS.md) · [技能规范](docs/SKILLS.md)
 
@@ -12,10 +12,11 @@
 
 - **项目总览**：Git 仓库与普通文件夹都能添加，不同 worktree 分别管理；长标题自动省略，悬停查看完整路径、分支与改动。
 - **会话状态**：执行中、等待输入、出现故障和空闲通过卡片边框与指示灯区分；头像、任务标题和完整会话 ID 就近查看。
-- **终端接入**：内置 Codex、WorkBuddy、Claude Code、Grok、Qoder 的规则、skill 与原生 hook 集成，安装前备份，卸载只清除 Ebisu 管理的配置。
+- **终端接入**：内置 Codex、WorkBuddy、Claude Code、Grok、Qoder、DeepSeek Harness 的规则、skill 与终端支持的原生 hook 集成，安装前备份，卸载只清除 Ebisu 管理的配置。
 - **技能管理**：中央保存技能文件，按终端安装轻量入口；查看带语法高亮的源文件、复制或导出文件，管理共享经验及全局、终端、项目三层变量。
+- **局域网互联**：手动配对自己的多台电脑，按设备查看项目、Git 和会话状态，浏览并按需导入技能包。
 - **桌面驻留**：托盘弹窗复用同一项目面板，关闭主窗口仅隐藏；支持跟随系统、浅色和深色主题。
-- **本地优先**：服务只监听 `127.0.0.1`，所有请求需要 bearer token；敏感变量由系统密钥服务加密保存，不保存提示词、回复或 Git diff，也不提供 agent 控制操作。
+- **本地优先**：本机通知服务只监听 `127.0.0.1`，请求需要 bearer token；局域网共享默认关闭，开启后使用独立的 HTTPS 服务与设备配对认证。敏感变量由系统密钥服务加密保存，不保存提示词、回复或 Git diff，也不提供 agent 控制操作。
 
 ## 界面
 
@@ -60,23 +61,40 @@ pnpm package:mac
 
 项目标题与文件夹图标同行，长标题自动省略。悬停图标查看完整名称、路径、分支、Git 状态和增删改数量；通过三点菜单在 Finder 中打开目录。会话以单行终端商标头像显示，超出时收纳到“+x”；悬停头像或“+x”查看详情并复制完整会话 ID，Codex 会话还可通过跳转按钮在桌面客户端中打开。卡片背景使用已识别模型的角色形象，模型未知时不显示背景；设置页可分别替换主窗口模型形象、托盘模型形象和终端商标，恢复默认会重置全部自定义素材。
 
+## 局域网互联
+
+在每台电脑安装并启动 Ebisu，添加各自的项目及终端集成，再到“设置 → 局域网共享”设置不同的设备名称并打开开关。共享默认关闭；开启后会通过 mDNS 发现附近设备，并在 `0.0.0.0` 的随机端口启动独立的 HTTPS 服务，不改变本机通知接口。配对后双方均可查看对方已添加的项目、Git 和会话状态，以及技能目录与文件。
+
+1. 在来源电脑选择共享地址，点击“生成配对邀请”。将邀请串复制到另一台电脑，在五分钟内粘贴并点击“配对设备”。邀请只能使用一次；附近设备列表只提供地址，不自动授予权限。
+2. 项目面板与技能列表通过设备筛选切换“本机／全部设备／指定设备”，默认本机。远端项目只读，目录路径属于来源电脑，不提供 Finder 操作或本机会话跳转。
+3. 点击远端技能，浏览文件和变量定义，再选择“导入本机”。导入不携带经验、变量取值、默认取值或终端安装记录，也不会自动安装或执行脚本。
+4. 同名相同内容可直接使用已有技能；不同内容需要改名。导入预览会修改入口名称与明确的 `--skill` 自引用，并允许修正文本。脚本文件名、路径和其他硬编码引用需要自行检查。
+5. 导入后切回“本机”，单独配置变量并安装终端入口。后续修改互不传播。解除配对会撤销访问并清除该设备缓存，保留已导入技能。
+
+设备每两秒拉取一次快照，十五秒未成功更新显示离线。离线仍可查看最后快照与更新时间，但不计入实时活跃统计；关闭共享立即将远端视图标为离线。共享关闭时停止发现、监听和拉取，保留配对关系。
+
+配对通过邀请中的证书指纹验证对端，后续连接采用双向 TLS 与持久证书绑定。局域网服务只提供只读白名单接口，不提供远程技能执行或变量读取。每两台设备需分别配对；配对关系和远端缓存不会转发给第三台设备。证书私钥保存在本机数据目录 `lan-identity.json`，权限为 `0600`，请勿将该文件复制到另一台设备。
+
+自动发现依赖同一局域网允许组播；不可发现时可在接收邀请的电脑填写“对端地址”，输入来源电脑的局域网 `IP:端口`，仍需有效邀请。当前自动共享地址使用 IPv4；如系统防火墙提示入站连接，请允许 Ebisu 在局域网通信。IP 或服务端口变化通常由自动发现恢复；组播受限时，在来源设备重新生成邀请并填写新地址。协议不兼容或设备证书变化时会显示错误，需要升级或解除旧配对后重新配对。
+
 ## 接入机制
 
-通知集成包含全局常驻规则、通知 skill 和原生生命周期 hook。skill 本身是模型按需调用的能力，不能提供强制执行保证，因此 hook 与规则共同补充。
+通知集成包含全局常驻规则、通知 skill 和终端支持的原生生命周期 hook。当前 DSH 没有可安装的用户级 hook，因此只安装规则与 skill，由模型主动上报。skill 本身是模型按需调用的能力，不能提供强制执行保证，因此 hook 与规则共同补充。
 
-| 终端        | 规则                                | Skill                                  | Hook 配置                    |
-| ----------- | ----------------------------------- | -------------------------------------- | ---------------------------- |
-| Codex       | `~/.codex/AGENTS.md` 标记块         | `~/.agents/skills/ebisu-codex/`        | `~/.codex/hooks.json`        |
-| WorkBuddy   | `~/.workbuddy/AGENTS.md` 标记块     | `~/.workbuddy/skills/ebisu-workbuddy/` | `~/.workbuddy/settings.json` |
-| Claude Code | `~/.claude/rules/ebisu-activity.md` | `~/.claude/skills/ebisu-claude/`       | `~/.claude/settings.json`    |
-| Grok        | `~/.grok/rules/ebisu-activity.md`   | `~/.grok/skills/ebisu-grok/`           | `~/.grok/hooks/ebisu.json`   |
-| Qoder       | `~/.qoder/AGENTS.md` 标记块         | `~/.qoder/skills/ebisu-qoder/`         | `~/.qoder/settings.json`     |
+| 终端             | 规则                                | Skill                                  | Hook 配置                    |
+| ---------------- | ----------------------------------- | -------------------------------------- | ---------------------------- |
+| Codex            | `~/.codex/AGENTS.md` 标记块         | `~/.agents/skills/ebisu-codex/`        | `~/.codex/hooks.json`        |
+| WorkBuddy        | `~/.workbuddy/AGENTS.md` 标记块     | `~/.workbuddy/skills/ebisu-workbuddy/` | `~/.workbuddy/settings.json` |
+| Claude Code      | `~/.claude/rules/ebisu-activity.md` | `~/.claude/skills/ebisu-claude/`       | `~/.claude/settings.json`    |
+| Grok             | `~/.grok/rules/ebisu-activity.md`   | `~/.grok/skills/ebisu-grok/`           | `~/.grok/hooks/ebisu.json`   |
+| Qoder            | `~/.qoder/AGENTS.md` 标记块         | `~/.qoder/skills/ebisu-qoder/`         | `~/.qoder/settings.json`     |
+| DeepSeek Harness | `~/.dsh/AGENTS.md` 标记块           | `~/.dsh/skills/ebisu-dsh/`             | 无原生 hook；模型主动上报    |
 
-安装前备份改动文件并增量合并 hook；卸载只清除 Ebisu 管理的配置。用户改写过的 skill 会被保留并报告冲突，不会直接覆盖。Codex 没有声明 hook 开关时添加带标记的开关，显式禁用时显示“能力受限”并保留用户选择。
+安装前备份改动文件并增量合并 hook；卸载只清除 Ebisu 管理的配置。用户改写过的 skill 会被保留并报告冲突，不会直接覆盖。Codex 没有声明 hook 开关时添加带标记的开关，显式禁用时显示“能力受限”并保留用户选择。DSH 不提供用户级生命周期 hook，设置页显示“能力受限”，由全局规则和 `ebisu-dsh` skill 主动上报；这不代表已取得原生事件保证。
 
 “检查”验证通知工具能否连接本机服务，不伪造会话。设置页按配置写入结果显示“已安装／未安装”，连通性通过“检查”单独确认。受终端版本、托管策略、沙箱和模型执行规则影响，上报可能缺失；不会用终端品牌猜测当前模型，也不会无限产生虚假心跳。
 
-仅覆盖本机执行环境。远程 SSH、云端 agent 或容器内的 `127.0.0.1` 不等于 macOS 宿主机，首期没有跨主机通知代理。安装路径按表中的标准用户配置目录处理。
+仅覆盖本机执行环境。远程 SSH、云端 agent 或容器内的 `127.0.0.1` 不等于 macOS 宿主机，没有跨主机通知代理。局域网互联只汇总各台电脑已经收到的本机通知。安装路径按表中的标准用户配置目录处理。
 
 ## 技能管理
 
@@ -139,15 +157,21 @@ better-sqlite3 按 Electron ABI 编译，`pnpm test` 使用 Electron 的 Node �
 
 端到端验收在 `pnpm build` 后运行，使用临时 HOME 和临时数据库，回放生命周期事件，校验实际终端探测、技能安装与文件查看、经验与变量管理、头像、深浅主题、托盘同步与驻留行为。不会在真实终端中发起模型任务，也不改动真实终端全局配置。截图写入忽略目录 `.smoke/`。
 
+`pnpm test` 包含局域网证书认证、邀请过期与重放、离线缓存、设备隔离及技能导入校验；`pnpm test:smoke` 还会启动两个隔离的 Electron 实例，验收配对、远端项目与会话、技能改名和预览编辑、导入、离线统计及解除配对。只需复测局域网界面时，可在构建后单独运行：
+
+```sh
+/Users/jiewan/.codex/bin/vitest-safe -- node scripts/lan-smoke.cjs
+```
+
 ## 目录结构
 
 ```text
-src/main/        SQLite、Git、路径匹配、终端集成、技能管理、HTTP、Electron 生命周期
+src/main/        SQLite、Git、路径匹配、终端集成、技能管理、HTTP、局域网互联与技能导入、Electron 生命周期
 src/preload/     受限业务 IPC 桥
 src/renderer/    Vue / Pinia / Naive UI 界面
 src/shared/      前后端共享协议类型
 resources/       通知与技能客户端、管理入口、迁移技能、线性图标与离线头像
-scripts/         测试启动器、Electron 验收与技能迁移工具
+scripts/         测试启动器、Electron 与双设备局域网验收、技能迁移工具
 tests/           真实临时仓库与隔离集成测试
 docs/            接口协议、终端适配、技能规范与界面截图
 ```
@@ -155,6 +179,8 @@ docs/            接口协议、终端适配、技能规范与界面截图
 ## 数据与隐私
 
 数据位于 `~/Library/Application Support/Ebisu/`：`ebisu.sqlite`、`runtime.json`、`integration/`、`backups/`、自定义 `avatars/` 和技能目录 `.ebisu/`。数据库保存技能元数据、经验、安装记录与变量值；敏感变量加密保存，系统密钥服务不可用时拒绝操作，不回退明文。不会存储 agent 的提示词、回复或 Git diff 内容。内部活动墓碑用于防止旧事件复活，目录移除会清理其会话记录。
+
+局域网设备身份与证书私钥另存于同目录的 `lan-identity.json`；共享开关、配对关系、远端快照缓存和技能导入来源记录保存在 SQLite 中。已配对设备可见共享的项目路径、会话 ID、任务标题与技能源文件；变量定义会共享，变量取值、默认取值和经验不会传输。请在共享前检查技能源文件是否包含自行硬编码的敏感内容。
 
 ## 许可
 
