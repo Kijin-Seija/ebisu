@@ -348,6 +348,16 @@ export class Store {
       )
       .all(folderId) as SessionActivity[]
   }
+  /**
+   * 已结束会话的最后事件时间。展示层用它阻止投影发现复活刚显式退出的会话；
+   * 退出之后投影若又有新活动（新回合），时间会大于退出时间，仍可重新出现。
+   */
+  endedSessions(folderId: string): Map<string, number> {
+    const rows = this.db
+      .prepare('SELECT terminal,sessionId,lastSeen FROM activities WHERE folderId=? AND active=0')
+      .all(folderId) as { terminal: string; sessionId: string; lastSeen: number }[]
+    return new Map(rows.map((row) => [`${row.terminal}:${row.sessionId}`, row.lastSeen]))
+  }
   /** 仅解除面板占用；不会终止宿主 agent，故障只能由同项目后续的执行中请求清除。 */
   clearSession(folderId: string, terminal: TerminalId, sessionId: string): void {
     this.db

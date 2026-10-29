@@ -24,6 +24,7 @@ import { readGitStatus } from './git'
 import { startServer } from './server'
 import { Integrations } from './integrations'
 import { TaskTitles } from './task-titles'
+import { DshSessionFacts, resumedAfterExit } from './dsh-session-facts'
 import { Skills, SkillError, targetSchema } from './skills'
 import { Lan } from './lan'
 import {
@@ -52,6 +53,7 @@ let quitting = false
 let store: Store
 let integrations: Integrations
 let taskTitles: TaskTitles
+let dshSessionFacts: DshSessionFacts
 let skills: Skills
 let lan: Lan
 let service: Awaited<ReturnType<typeof startServer>> | undefined
@@ -124,14 +126,39 @@ async function watchFolders(): Promise<void> {
 }
 
 async function snapshot(): Promise<Snapshot> {
-  const folders = await Promise.all(
-    store.folders().map(async (folder) => ({
+  const registered = store.folders()
+  const reported = await Promise.all(
+    registered.map(async (folder) => ({
       ...folder,
       git: gitCache.get(folder.id) ?? null,
-      sessions: await taskTitles.enrich(store.sessions(folder.id)),
+      // DSH 上报时投影缓存可能还没落盘，展示快照再补全一次缺失的模型与标题。
+      sessions: await dshSessionFacts.enrich(await taskTitles.enrich(store.sessions(folder.id))),
       available: existsSync(folder.path)
     }))
   )
+  // DSH 没有原生 hook：投影仍在更新的运行中回合直接补进面板，不依赖模型主动上报。
+  const live = await dshSessionFacts.live(registered)
+  const reportedIds = new Set(
+    reported.flatMap((folder) =>
+      folder.sessions.map((session) => `${session.terminal}:${session.sessionId}`)
+    )
+  )
+  const folders = reported.map((folder) => {
+    // 已显式退出且投影没有更新过的会话不复活；退出后开始的新回合同样会更新时间戳。
+    const ended = store.endedSessions(folder.id)
+    const discovered = (live.get(folder.id) ?? []).filter((session) => {
+      const key = `dsh:${session.sessionId}`
+      if (reportedIds.has(key)) return false
+      return resumedAfterExit(ended.get(key), session.lastSeen)
+    })
+    if (!discovered.length) return folder
+    return {
+      ...folder,
+      sessions: [...folder.sessions, ...discovered].sort(
+        (a, b) => a.startedAt - b.startedAt || a.sessionId.localeCompare(b.sessionId)
+      )
+    }
+  })
   return {
     lan: lan?.view(),
     folders,
@@ -458,6 +485,11 @@ async function boot(): Promise<void> {
       ? path.join(integrations.home, '.codex')
       : process.env.CODEX_HOME || path.join(integrations.home, '.codex')
   )
+  // 投影缓存与上报桥使用同一份 DSH 用户目录；smoke 模式固定使用临时 HOME，不读取真实会话。
+  const dshHome = process.env.EBISU_SMOKE
+    ? path.join(integrations.home, '.dsh')
+    : process.env.DSH_HOME || path.join(integrations.home, '.dsh')
+  dshSessionFacts = new DshSessionFacts(dshHome)
   lan = new Lan(store, skills, {
     directory: dataDirectory,
     changed,

@@ -100,7 +100,8 @@ function bridge(
       'QODER_PROJECT_DIR',
       'QODER_SESSION_ID',
       'CLAUDE_SESSION_ID',
-      'DSH_SESSION_ID'
+      'DSH_SESSION_ID',
+      'ANTIGRAVITY_CONVERSATION_ID'
     ])
       delete env[key]
     const child = spawn(integrations.bridge, args, {
@@ -137,7 +138,8 @@ function launcher(
       'QODER_PROJECT_DIR',
       'QODER_SESSION_ID',
       'CLAUDE_SESSION_ID',
-      'DSH_SESSION_ID'
+      'DSH_SESSION_ID',
+      'ANTIGRAVITY_CONVERSATION_ID'
     ])
       delete env[key]
     const child = spawn(client, args, { env })
@@ -233,13 +235,16 @@ it('应用可执行文件缺失时启动器仍按离线降级，不把 shell 报
   expect(health.code).toBe(0)
   expect(health.stdout).toBe('{"ok":false}')
 })
-it('受管规则声明上报失败不能中止任务', () => {
+it('受管规则声明上报失败不能中止任务，只跳过本次并继续后续上报', () => {
   binary('claude')
   integrations.install('claude')
   const rule = text('.claude/rules/ebisu-activity.md')
   expect(rule).toContain('不构成任务的前置条件')
   expect(rule).toContain('绝不终止任务')
   expect(rule).toContain('不自动启动 Ebisu')
+  // 短暂的 Ebisu 离线不能让 agent 在本次任务里永久停报。
+  expect(rule).toContain('只跳过本次上报')
+  expect(rule).toContain('后续到达检查点')
 })
 it('Qoder 只有配置残留时不算已安装；可执行文件与应用均可作为安装证据', () => {
   file('.qoder/AGENTS.md', 'residual')
@@ -926,5 +931,176 @@ it('DSH 手动上报从会话投影补全当前模型与标题，显式参数优
   expect(store.sessions(folder.id)[0]).toMatchObject({
     model: 'deepseek-reasoner',
     taskTitle: '显式标题'
+  })
+})
+
+/** Antigravity hook 使用真实受管命令参数回放：负载为 camelCase，事件名由 --event 指明。 */
+function antigravityHook(event: string, input: Record<string, unknown>): Promise<string> {
+  return bridge(['--hook', '--terminal', 'antigravity', '--hook-json', '--event', event], input)
+}
+it('Antigravity 安装全局规则、skill 与命名 hook，保留用户其他 hook，卸载只移除 Ebisu 钩子', async () => {
+  file('.gemini/GEMINI.md', '# 我的全局规则\n')
+  const userHook = {
+    'lint-checker': {
+      PostToolUse: [{ matcher: 'run_command', hooks: [{ type: 'command', command: './lint.sh' }] }]
+    }
+  }
+  file('.gemini/config/hooks.json', JSON.stringify(userHook))
+  expect(integrations.detect('antigravity')).toEqual([])
+  app('Antigravity.app')
+  integrations.install('antigravity')
+  expect(text('.gemini/GEMINI.md')).toContain('# 我的全局规则')
+  expect(text('.gemini/GEMINI.md')).toContain('--terminal antigravity')
+  expect(text('.gemini/GEMINI.md')).toContain('ANTIGRAVITY_CONVERSATION_ID')
+  expect(text('.gemini/config/skills/ebisu-antigravity/SKILL.md')).toContain(
+    'name: ebisu-antigravity'
+  )
+  expect(text('.gemini/config/skills/ebisu-skill-create/SKILL.md')).toContain('.ebisu/management/')
+  const hooks = JSON.parse(text('.gemini/config/hooks.json'))
+  expect(hooks['lint-checker']).toEqual(userHook['lint-checker'])
+  const owned = hooks['ebisu-antigravity']
+  expect(Object.keys(owned).sort()).toEqual(['PostToolUse', 'PreInvocation', 'Stop'])
+  // 不注册 PreToolUse：它必须返回放行决策，会改变宿主的权限流程。
+  expect(owned.PreToolUse).toBeUndefined()
+  expect(owned.PostToolUse[0].matcher).toBe('*')
+  expect(owned.PostToolUse[0].hooks[0].command).toContain('--event PostToolUse')
+  expect(owned.PreInvocation[0].command).toMatch(
+    /--hook-json --event PreInvocation --ebisu-owner=antigravity$/
+  )
+  expect(integrations.views().find((view) => view.id === 'antigravity')).toMatchObject({
+    installed: true,
+    health: 'restart'
+  })
+  // 重复安装不重复添加。
+  integrations.install('antigravity')
+  expect(JSON.parse(text('.gemini/config/hooks.json'))['ebisu-antigravity'].Stop).toHaveLength(1)
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  expect(await integrations.check('antigravity')).toContain('本机通知链路正常')
+  integrations.uninstall('antigravity')
+  expect(JSON.parse(text('.gemini/config/hooks.json'))).toEqual(userHook)
+  expect(text('.gemini/GEMINI.md')).toContain('# 我的全局规则')
+  expect(text('.gemini/GEMINI.md')).not.toContain('EBISU ACTIVITY')
+  expect(existsSync(path.join(home, '.gemini/config/skills/ebisu-antigravity/SKILL.md'))).toBe(
+    false
+  )
+})
+it('Antigravity 同名 hook 非 Ebisu 所有时拒绝覆盖并回滚；显式禁用的 Ebisu hook 保留并显示受限', () => {
+  app('Antigravity.app')
+  file(
+    '.gemini/config/hooks.json',
+    JSON.stringify({ 'ebisu-antigravity': { Stop: [{ command: './mine.sh' }] } })
+  )
+  expect(() => integrations.install('antigravity')).toThrow('不是 Ebisu 管理的配置')
+  expect(existsSync(path.join(home, '.gemini/GEMINI.md'))).toBe(false)
+  expect(existsSync(path.join(home, '.gemini/config/skills/ebisu-antigravity/SKILL.md'))).toBe(
+    false
+  )
+  rmSync(path.join(home, '.gemini/config/hooks.json'))
+  integrations.install('antigravity')
+  const hooks = JSON.parse(text('.gemini/config/hooks.json'))
+  hooks['ebisu-antigravity'].enabled = false
+  writeFileSync(path.join(home, '.gemini/config/hooks.json'), JSON.stringify(hooks))
+  expect(integrations.views().find((view) => view.id === 'antigravity')?.health).toBe('limited')
+  integrations.install('antigravity')
+  expect(JSON.parse(text('.gemini/config/hooks.json'))['ebisu-antigravity'].enabled).toBe(false)
+})
+it('Antigravity hook 输出 JSON，完成执行、等待保留、后台未空闲、退出与故障链路', async () => {
+  const folder = store.addFolder(root)
+  integrations.prepareBridge()
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  const common = {
+    conversationId: 'agy-conversation',
+    workspacePaths: [root],
+    modelName: 'Claude Opus 5.5 (Medium)'
+  }
+  const sessions = () => store.sessions(folder.id).filter((item) => item.terminal === 'antigravity')
+  expect(await antigravityHook('PreInvocation', { ...common, invocationNum: 1 })).toBe('{}')
+  expect(sessions()).toMatchObject([
+    { sessionId: 'agy-conversation', phase: 'executing', model: 'Claude Opus 5.5 (Medium)' }
+  ])
+  // 手动上报经 run_command 子进程读取宿主导出的会话 ID。
+  const env = { ANTIGRAVITY_CONVERSATION_ID: 'agy-conversation' }
+  expect(await bridge(['--terminal', 'antigravity', '--new-session'], {}, env)).toBe(
+    'agy-conversation'
+  )
+  expect(
+    await bridge(
+      ['--terminal', 'antigravity', '--path', root, '--action', 'enter', '--phase', 'waiting'],
+      {},
+      env
+    )
+  ).toBe('{"ok":true}')
+  // 同一轮后续模型调用不能覆盖主动上报的 waiting；Stop 软结束保留 waiting。
+  await antigravityHook('PreInvocation', { ...common, invocationNum: 2 })
+  await antigravityHook('Stop', { ...common, terminationReason: 'NO_TOOL_CALL', fullyIdle: true })
+  expect(sessions()).toMatchObject([{ phase: 'waiting' }])
+  await antigravityHook('PostToolUse', {
+    ...common,
+    toolCall: { name: 'read_file', args: { Path: path.join(root, 'README.md') } }
+  })
+  expect(sessions()).toMatchObject([{ phase: 'executing' }])
+  // 仍有后台任务时会话稍后会被唤醒，不提前释放。
+  await antigravityHook('Stop', { ...common, terminationReason: 'NO_TOOL_CALL', fullyIdle: false })
+  expect(sessions()).toMatchObject([{ phase: 'executing' }])
+  await antigravityHook('Stop', { ...common, terminationReason: 'NO_TOOL_CALL', fullyIdle: true })
+  expect(sessions()).toHaveLength(0)
+  // 执行器 ERROR 且带错误原文才算接口故障；故障在下一次 executing 前保留。
+  await antigravityHook('PreInvocation', { ...common, invocationNum: 1 })
+  await antigravityHook('Stop', {
+    ...common,
+    terminationReason: 'ERROR',
+    error: 'stream disconnected',
+    fullyIdle: true
+  })
+  expect(sessions()).toMatchObject([{ phase: 'error' }])
+  await antigravityHook('PreInvocation', { ...common, invocationNum: 1 })
+  expect(sessions()).toMatchObject([{ phase: 'executing' }])
+  await antigravityHook('Stop', { ...common, terminationReason: 'USER_CANCELED', fullyIdle: true })
+  expect(sessions()).toHaveLength(0)
+})
+it('Antigravity 上报命令自身的 PostToolUse 只绑定临时身份，不刷新执行状态', async () => {
+  const folder = store.addFolder(root)
+  integrations.prepareBridge()
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  await bridge([
+    '--terminal',
+    'antigravity',
+    '--session',
+    'local-agy-temp',
+    '--path',
+    root,
+    '--phase',
+    'waiting'
+  ])
+  const command = `'${integrations.bridge}' --terminal antigravity --session local-agy-temp --path ${root} --phase waiting`
+  expect(
+    await antigravityHook('PostToolUse', {
+      conversationId: 'agy-real',
+      workspacePaths: [root],
+      toolCall: { name: 'run_command', args: { CommandLine: command } }
+    })
+  ).toBe('{}')
+  expect(store.sessions(folder.id)).toMatchObject([
+    { terminal: 'antigravity', sessionId: 'agy-real', phase: 'waiting' }
+  ])
+})
+it('Antigravity hook 在 Ebisu 未运行或应用缺失时仍输出 {} 并 0 退出', async () => {
+  integrations.prepareBridge()
+  const args = ['--hook', '--terminal', 'antigravity', '--hook-json', '--event', 'Stop']
+  const offline = await launcher(integrations.bridge, args, { conversationId: 'agy-offline' })
+  expect(offline).toEqual({ code: 0, stdout: '{}\n', stderr: '' })
+  const moved = new Integrations(store, {
+    home,
+    dataDirectory: data,
+    resources: path.resolve('resources'),
+    executable: path.join(root, 'missing/Ebisu.app/Contents/MacOS/Ebisu'),
+    pathEnv: bin,
+    appDirectories: [apps]
+  })
+  moved.prepareBridge()
+  expect(await launcher(moved.bridge, args, { conversationId: 'agy-offline' })).toEqual({
+    code: 0,
+    stdout: '{}\n',
+    stderr: ''
   })
 })

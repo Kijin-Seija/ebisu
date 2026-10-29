@@ -745,9 +745,9 @@ async function main() {
       '14px'
     )
     await window.locator('.preference-heading').click()
-    assert.equal(await window.locator('.integration-row').count(), 7)
-    // Qoder 与 Qoder CN 共用一张商标，因此 7 个终端只渲染 6 个分组图标。
-    assert.equal(await window.locator('.integration-group').count(), 6)
+    assert.equal(await window.locator('.integration-row').count(), 8)
+    // Qoder 与 Qoder CN 共用一张商标，因此 8 个终端只渲染 7 个分组图标。
+    assert.equal(await window.locator('.integration-group').count(), 7)
     assert.equal(
       await window
         .locator('.integration-group')
@@ -771,7 +771,7 @@ async function main() {
         `${id} should be detected`
       )
     // 用户可在开发期间安装终端；实机结果跟随实际状态，未安装分支另有隔离测试。
-    for (const id of ['qoder', 'qodercn', 'dsh'])
+    for (const id of ['qoder', 'qodercn', 'dsh', 'antigravity'])
       assert.equal(
         await window
           .locator(`[data-terminal="${id}"]`)
@@ -977,6 +977,73 @@ async function main() {
     const plain = initial.folders.find((folder) => folder.name === 'design-notes')
     await window.evaluate((id) => window.ebisu.removeFolder(id), plain.id)
     assert.equal(existsSync(ordinary), true, 'removing registration must keep files')
+    // DSH 首次上报时投影缓存可能还没落盘：快照必须从之后生成的投影补全模型，卡片恢复角色背景。
+    const dshFolder = path.join(fixture, 'writer-3')
+    mkdirSync(dshFolder)
+    await app.evaluate(({ dialog }, directory) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
+    }, dshFolder)
+    await window.evaluate(() => window.ebisu.addFolder())
+    const dshCard = window.locator('[data-folder="writer-3"]')
+    await dshCard.waitFor()
+    const dshSession = 'session-dsh-projection'
+    await activity(dshFolder, 'dsh', dshSession)
+    const beforeProjection = (await window.evaluate(() => window.ebisu.snapshot())).folders.find(
+      (folder) => folder.name === 'writer-3'
+    ).sessions[0]
+    assert.equal(beforeProjection.model, null)
+    assert.equal(await dshCard.locator('.card-avatar-background-image').count(), 0)
+    const projection = path.join(
+      home,
+      '.dsh/storages/session_projcache/sessions',
+      `${dshSession}.json`
+    )
+    mkdirSync(path.dirname(projection), { recursive: true })
+    writeFileSync(
+      projection,
+      JSON.stringify({
+        record: {
+          rows: {
+            modelSelection: { val: { lastUsed: { model: 'deepseek-flash' } } },
+            title: { val: '执行字符测试用例并修复P0/P1问题' }
+          }
+        }
+      })
+    )
+    // 再次上报同样不带 model，界面上的模型只能来自投影补全。
+    await activity(dshFolder, 'dsh', dshSession)
+    await dshCard.locator('.card-avatar-background-image').waitFor()
+    assert.match(
+      await dshCard.locator('.card-avatar-background-image').evaluate((image) => image.src),
+      /\/model\/deepseek\?/
+    )
+    await dshCard.screenshot({ path: path.join(screenshots, 'dsh-background.png') })
+    // 未主动上报的 DSH 会话：只要投影中的回合仍在进行，也直接补进面板。
+    const discoveredId = 'session-dsh-discovered'
+    writeFileSync(
+      path.join(path.dirname(projection), `${discoveredId}.json`),
+      JSON.stringify({
+        version: 7,
+        record: {
+          identity: { cwd: dshFolder, createdAt: Date.now() - 60000 },
+          rows: {
+            modelSelection: { val: { lastUsed: { model: 'deepseek-reasoner' } } },
+            title: { val: '未上报但仍在运行的会话' },
+            turnBoundary: { val: { openTurnStartSeq: 1 } }
+          }
+        }
+      })
+    )
+    // 任一活动请求都会广播刷新；再次刷新已上报的会话，让发现结果进入快照。
+    await activity(dshFolder, 'dsh', dshSession)
+    await dshCard.locator('.session').nth(1).waitFor()
+    const discovered = (await window.evaluate(() => window.ebisu.snapshot())).folders.find(
+      (folder) => folder.name === 'writer-3'
+    ).sessions
+    assert.equal(discovered.length, 2)
+    assert.ok(discovered.some((session) => session.sessionId === discoveredId))
+    assert.equal(await dshCard.locator('.card-avatar-background-image').count(), 2)
+    await activity(dshFolder, 'dsh', dshSession, { action: 'exit' })
     if (process.platform === 'darwin' && !packaged) {
       // 用另一个 Electron 进程模拟“其他应用”的原生全屏 Space，退出时自动恢复。
       // NSWorkspace/CoreGraphics 只读取前台 PID 与可见窗口，不依赖辅助功能权限。

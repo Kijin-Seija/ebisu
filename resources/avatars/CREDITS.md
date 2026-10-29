@@ -35,4 +35,6 @@ DeepSeek 形象原始创作者为上善无形，女仆二次设计为 ZipZipPipe
   用于识别已安装的应用，权利归 WorkBuddy / 腾讯。
 - DeepSeek Harness 图标提取自官方 `DeepSeek Harness.app/Contents/Resources/icon.png`，
   仅缩放为 128×128 PNG，用于识别已安装的应用；权利归 DeepSeek。
+- Antigravity 图标提取自本机官方 `Antigravity.app/Contents/Resources/icon.icns`，
+  仅缩放为 128×128 PNG，用于识别已安装的应用；权利归 Google。
 - Ebisu 应用图标与托盘图标由本项目绘制，随代码采用 MIT。

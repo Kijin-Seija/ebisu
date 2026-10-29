@@ -83,6 +83,21 @@ describe('目录与会话租约', () => {
     report(project.path, { sessionId: 'local-old', action: 'exit', scope: 'session', sequence: 23 })
     expect(store.sessions(project.id)).toMatchObject([{ sessionId: 'real-two' }])
   })
+  it('记录已结束会话的最后事件时间，供投影发现避免复活显式退出', () => {
+    const project = folder('repo')
+    expect(store.endedSessions(project.id).size).toBe(0)
+    report(project.path, { terminal: 'dsh', sessionId: 'session-dsh' })
+    expect(store.endedSessions(project.id).size).toBe(0)
+    time += 1000
+    report(project.path, {
+      terminal: 'dsh',
+      sessionId: 'session-dsh',
+      action: 'exit',
+      scope: 'session'
+    })
+    expect(store.sessions(project.id)).toHaveLength(0)
+    expect(store.endedSessions(project.id).get('dsh:session-dsh')).toBe(time)
+  })
   it('按真实路径去重，并使用最深目录和路径边界匹配', () => {
     const parent = folder('repo')
     const child = folder('repo/nested')

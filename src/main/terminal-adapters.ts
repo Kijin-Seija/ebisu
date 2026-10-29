@@ -8,6 +8,11 @@ interface Adapter {
   skillRoot: string
   rule: string
   hookFile?: string
+  /**
+   * hook 配置形状：grouped 为 Claude 系的 `{ hooks: { 事件: [分组] } }`；
+   * named 为 Antigravity 的 `{ 钩子名: { 事件: [...] } }`，Ebisu 只拥有自己的钩子名。
+   */
+  hookFormat?: 'grouped' | 'named'
   /** 终端不提供可安装的生命周期 hook 时只能依赖规则与 skill 主动上报。 */
   hookSupport?: 'native' | 'none'
   events: string[]
@@ -139,5 +144,19 @@ export const adapters: Record<TerminalId, Adapter> = {
     rule: '.dsh/AGENTS.md',
     hookSupport: 'none',
     events: []
+  },
+  // Antigravity 2.x 的用户级自定义根为 ~/.gemini/config（skills/、hooks.json），
+  // 全局规则沿用文档声明的 ~/.gemini/GEMINI.md。hooks.json 按钩子名分组，事件负载为 camelCase，
+  // 不携带事件名，因此命令行显式传入 --event。PreToolUse 必须返回放行决策，会改变宿主权限流程，
+  // 故不注册；只用不需要决策输出的 PreInvocation、PostToolUse 与 Stop。
+  antigravity: {
+    commands: ['agy'],
+    apps: ['Antigravity.app'],
+    root: '.gemini',
+    skillRoot: '.gemini/config/skills',
+    rule: '.gemini/GEMINI.md',
+    hookFile: '.gemini/config/hooks.json',
+    hookFormat: 'named',
+    events: ['PreInvocation', 'PostToolUse', 'Stop']
   }
 }

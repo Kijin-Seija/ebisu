@@ -58,6 +58,9 @@ function environmentSession(terminal) {
       return process.env.CLAUDE_SESSION_ID
     case 'dsh':
       return process.env.DSH_SESSION_ID
+    // Antigravity 向 run_command 子进程导出当前会话 ID，与 hook 负载的 conversationId 一致。
+    case 'antigravity':
+      return process.env.ANTIGRAVITY_CONVERSATION_ID
     default:
       return undefined
   }
@@ -69,6 +72,7 @@ function sessionIdentity(args, input, terminal) {
   const sessionId =
     input.session_id ||
     input.sessionId ||
+    input.conversationId ||
     (explicit && !explicit.startsWith('local-') ? explicit : undefined) ||
     environmentSession(terminal) ||
     explicit
@@ -203,6 +207,31 @@ function dshSessionFacts(sessionId) {
   }
 }
 
+/**
+ * 工具参数：Claude 系为 tool_input；Antigravity 为 toolCall.args（对象，或个别版本为 JSON 字符串）。
+ * 字符串无法解析时保留为 raw 字段，仍可用于识别上报命令自身，但不会被当作路径。
+ */
+function toolArguments(input) {
+  const value =
+    input.tool_input || input.toolInput || input.toolCall?.args || input.toolCall?.arguments || {}
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return { raw: value }
+    }
+  }
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : {}
+}
+
+/** Antigravity hook 在 ~/.gemini/config 下执行，项目目录只能取自负载中的 workspacePaths。 */
+function workspacePaths(input) {
+  return Array.isArray(input.workspacePaths)
+    ? input.workspacePaths.filter((item) => typeof item === 'string' && path.isAbsolute(item))
+    : []
+}
+
 /** 将文件参数转换为所在目录；新文件逐级回溯到已存在的父目录。 */
 function directoryFor(input, cwd) {
   let candidate = path.resolve(cwd, input)
@@ -219,6 +248,8 @@ function directoryFor(input, cwd) {
 async function main() {
   const args = argumentsMap(process.argv.slice(2))
   const terminal = actualTerminal(args.terminal)
+  // Antigravity 要求 hook 在 stdout 输出 JSON；空对象不改变宿主决策，必须先于任何提前返回写出。
+  if (args.hook && args['hook-json']) process.stdout.write('{}\n')
   if (args['new-session']) {
     // 老规则会主动调用此参数。即使 agent 不知道环境变量，也不能再生成第二个身份。
     process.stdout.write(`${environmentSession(terminal) || `local-${crypto.randomUUID()}`}\n`)
@@ -249,13 +280,20 @@ async function main() {
   // 不执行从其他宿主兼容加载的副本，原生适配器会处理同一事件。
   if (args.hook && terminal !== args.terminal) return
   const input = args.hook ? await hookInput() : {}
+  // Antigravity 负载不含事件名，由受管 hook 命令的 --event 指明。
   const rawEvent =
-    input.hook_event_name || input.hookEventName || input.event || process.env.GROK_HOOK_EVENT || ''
+    input.hook_event_name ||
+    input.hookEventName ||
+    input.event ||
+    (typeof args.event === 'string' ? args.event : '') ||
+    process.env.GROK_HOOK_EVENT ||
+    ''
   const event = rawEvent.replace(/[_-]/g, '').toLowerCase()
   if (
     args.hook &&
     ![
       'userpromptsubmit',
+      'preinvocation',
       'pretooluse',
       'posttooluse',
       'posttoolusefailure',
@@ -277,7 +315,7 @@ async function main() {
     manualStatus(args, false, 'missing-session-id')
     return
   }
-  const toolInput = input.tool_input || input.toolInput || {}
+  const toolInput = toolArguments(input)
   // Node 可能把 /var 解析为 /private/var；同时接受安装命令使用的原始路径。
   const ownBridges = [
     __filename.replace(/\.cjs$/, ''),
@@ -304,10 +342,12 @@ async function main() {
       })
     return
   }
+  const workspaces = workspacePaths(input)
   const cwd = String(
     args.path ||
       input.cwd ||
       input.workspaceRoot ||
+      workspaces[0] ||
       process.env.GROK_WORKSPACE_ROOT ||
       process.cwd()
   )
@@ -328,7 +368,29 @@ async function main() {
   }
   if (args.hook) {
     if (event === 'sessionstart') return
-    if (event === 'stopfailure') {
+    if (event === 'stop' && typeof input.terminationReason === 'string') {
+      // Antigravity Stop：仍有后台任务（fullyIdle=false）时会话稍后会被唤醒，不提前释放；
+      // 只有执行器以 ERROR 终止且附带错误原文才视为宿主接口故障，用户取消不保留 waiting。
+      if (input.fullyIdle === false) return
+      if (
+        input.terminationReason === 'ERROR' &&
+        typeof input.error === 'string' &&
+        input.error.trim()
+      ) {
+        phase = 'error'
+        scope = 'session'
+      } else {
+        action = 'exit'
+        scope = 'session'
+        preserveWaiting = input.terminationReason !== 'USER_CANCELED'
+      }
+    } else if (event === 'preinvocation') {
+      // 每次模型调用前都会触发；只有本轮首个调用等价于用户提交。后续调用若刷新为 executing，
+      // 会覆盖模型刚按规则主动上报的 waiting（随后才输出提问），因此跳过，心跳交给 PostToolUse。
+      const invocation = Number(input.invocationNum)
+      if (Number.isFinite(invocation) && invocation > 1) return
+      scope = 'session'
+    } else if (event === 'stopfailure') {
       // StopFailure 是宿主报告的接口失败事件，任务结果由普通 Stop 结束。
       phase = 'error'
       scope = 'session'
@@ -356,7 +418,22 @@ async function main() {
   }
   const paths = new Set([directoryFor(cwd, process.cwd())])
   if (args.hook && action === 'enter') {
-    for (const key of ['file_path', 'filePath', 'path', 'target_file', 'workdir', 'cwd']) {
+    for (const workspace of workspaces) paths.add(directoryFor(workspace, cwd))
+    // 后半部分为 Antigravity 工具参数名（PascalCase）。
+    for (const key of [
+      'file_path',
+      'filePath',
+      'path',
+      'target_file',
+      'workdir',
+      'cwd',
+      'Path',
+      'AbsolutePath',
+      'TargetFile',
+      'DirectoryPath',
+      'SearchPath',
+      'Cwd'
+    ]) {
       if (typeof toolInput[key] === 'string' && toolInput[key])
         paths.add(directoryFor(toolInput[key], cwd))
     }
@@ -365,7 +442,14 @@ async function main() {
   const sequence = Math.floor(performance.timeOrigin * 1000)
   // DSH 的手动上报无法像原生 hook 一样携带模型；用会话投影补全，显式参数仍优先。
   const dshFacts = terminal === 'dsh' ? dshSessionFacts(sessionId) : {}
-  const rawModel = args.model || input.model || dshFacts.model
+  // Antigravity 负载带当前模型显示名；"auto" 只是路由占位，不能当作真实模型。
+  const hostModel =
+    typeof input.modelName === 'string' &&
+    input.modelName.trim() &&
+    input.modelName.trim().toLowerCase() !== 'auto'
+      ? input.modelName.trim().slice(0, 128)
+      : undefined
+  const rawModel = args.model || input.model || hostModel || dshFacts.model
   // 只接受宿主明确提供的标题字段；title/prompt/tool_input.title 不能代表会话自动标题。
   const rawTitle =
     args['task-title'] ||

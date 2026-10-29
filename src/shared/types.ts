@@ -8,7 +8,8 @@ export const terminalIds = [
   'grok',
   'qoder',
   'qodercn',
-  'dsh'
+  'dsh',
+  'antigravity'
 ] as const
 export type TerminalId = (typeof terminalIds)[number]
 /** 显示名称只用于界面；协议、配置目录和 skill 名称始终使用终端标识。 */
@@ -19,7 +20,8 @@ export const terminalNames: Record<TerminalId, string> = {
   grok: 'Grok',
   qoder: 'Qoder',
   qodercn: 'Qoder CN',
-  dsh: 'DeepSeek Harness'
+  dsh: 'DeepSeek Harness',
+  antigravity: 'Antigravity'
 }
 /** 同一品牌的不同发行版共用商标素材与自定义头像，避免界面出现重复图标。 */
 const terminalIconIds: Partial<Record<TerminalId, TerminalId>> = { qodercn: 'qoder' }

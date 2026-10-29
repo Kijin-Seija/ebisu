@@ -12,10 +12,10 @@
 
 - **项目总览**：Git 仓库与普通文件夹都能添加，不同 worktree 分别管理；长标题自动省略，悬停查看完整路径、分支与改动。
 - **会话状态**：执行中、等待输入、出现故障和空闲通过卡片边框与指示灯区分；头像、任务标题和完整会话 ID 就近查看。
-- **终端接入**：内置 Codex、WorkBuddy、Claude Code、Grok、Qoder、Qoder CN、DeepSeek Harness 的规则、skill 与终端支持的原生 hook 集成，安装前备份，卸载只清除 Ebisu 管理的配置。Qoder 与 Qoder CN 共用图标，分别探测和记录安装状态。
-- **技能管理**：中央保存技能文件，按终端安装轻量入口；查看带语法高亮的源文件、复制或导出文件，管理共享经验及全局、终端、项目三层变量。
-- **局域网互联**：在附近设备发起请求、对方确认后配对，按设备查看项目、Git 和会话状态，浏览并按需导入技能包。
-- **桌面驻留**：托盘弹窗复用同一项目面板，关闭主窗口仅隐藏；支持跟随系统、浅色和深色主题。
+- **终端接入**：内置 Codex、WorkBuddy、Claude Code、Grok、Qoder、Qoder CN、DeepSeek Harness、Antigravity 八种终端的规则、skill 与原生 hook 集成，安装前自动备份，卸载只清除受管配置。上报服务离线时静默放行，绝不阻断终端 Agent 正常任务。
+- **技能管理**：中央保存技能文件，按终端安装轻量入口；查看带语法高亮的源文件、复制或导出文件，管理跨终端共享经验及全局、终端、项目三层变量。
+- **局域网互联**：基于 mDNS 自动发现，对方确认后通过双向 TLS 配对；按设备查看项目、Git 与会话状态，浏览远端技能并按需改名导入。
+- **桌面驻留**：托盘弹窗复用同一项目面板，关闭主窗口仅隐藏；支持跟随系统、浅色和深色主题，并根据已识别模型展示对应角色卡片背景。
 - **本地优先**：本机通知服务只监听 `127.0.0.1`，请求需要 bearer token；局域网共享默认关闭，开启后使用独立的 HTTPS 服务与设备配对认证。敏感变量由系统密钥服务加密保存，不保存提示词、回复或 Git diff，也不提供 agent 控制操作。
 
 ## 界面
@@ -57,7 +57,7 @@ pnpm package:mac
 
 卡片上的 Git clean 颜色与目录忙碌灯独立：Git 干净的目录也可能正在被 agent 阅读或规划。增删改按文件统计，暂存与工作区重复改动只算一次；重命名和冲突算修改，未跟踪文件算新增。
 
-头像详情中的“任务”显示终端提供的真实会话标题。Codex 可从本地会话索引读取与应用标题栏一致的名称，后续改名也会同步；其他终端通过通知协议上报。未取得标题时显示“未提供”，不会根据提示词生成或猜测。
+头像详情中的“任务”显示终端提供的真实会话标题。Codex 可从本地会话索引读取与应用标题栏一致的名称，DSH 可从本地会话投影读取标题与模型，后续改名也会同步；其他终端通过通知协议上报。未取得标题时显示“未提供”，不会根据提示词生成或猜测。对于未显式接入原生 hook 的 DSH，主进程支持只读解析会话投影缓存，自动发现正在运行中的活跃会话并感知未回答的提问状态（waiting），无需完全依赖模型的主动上报。
 
 项目标题与文件夹图标同行，长标题自动省略。悬停图标查看完整名称、路径、分支、Git 状态和增删改数量；通过三点菜单在 Finder 中打开目录。会话以单行终端商标头像显示，超出时收纳到“+x”；悬停头像或“+x”查看详情并复制完整会话 ID，Codex 会话还可通过跳转按钮在桌面客户端中打开。卡片背景使用已识别模型的角色形象，模型未知时不显示背景；设置页可分别替换主窗口模型形象、托盘模型形象和终端商标，恢复默认会重置全部自定义素材。
 
@@ -79,7 +79,7 @@ pnpm package:mac
 
 ## 接入机制
 
-通知集成包含全局常驻规则、通知 skill 和终端支持的原生生命周期 hook。当前 DSH 没有可安装的用户级 hook，因此只安装规则与 skill，由模型主动上报。skill 本身是模型按需调用的能力，不能提供强制执行保证，因此 hook 与规则共同补充。
+通知集成包含全局常驻规则、通知 skill 和终端支持的原生生命周期 hook。当前 DSH 没有可安装的用户级 hook，因此安装规则与 skill，由模型主动上报并辅以主进程只读会话投影发现机制。skill 本身是模型按需调用的能力，不能提供强制执行保证，因此 hook 与规则共同补充。
 
 | 终端             | 规则                                | Skill                                  | Hook 配置                    |
 | ---------------- | ----------------------------------- | -------------------------------------- | ---------------------------- |
@@ -89,9 +89,12 @@ pnpm package:mac
 | Grok             | `~/.grok/rules/ebisu-activity.md`   | `~/.grok/skills/ebisu-grok/`           | `~/.grok/hooks/ebisu.json`   |
 | Qoder            | `~/.qoder/AGENTS.md` 标记块         | `~/.qoder/skills/ebisu-qoder/`         | `~/.qoder/settings.json`     |
 | Qoder CN         | `~/.qoder-cn/AGENTS.md` 标记块      | `~/.qoder-cn/skills/ebisu-qodercn/`    | `~/.qoder-cn/settings.json`  |
-| DeepSeek Harness | `~/.dsh/AGENTS.md` 标记块           | `~/.dsh/skills/ebisu-dsh/`             | 无原生 hook；模型主动上报    |
+| DeepSeek Harness | `~/.dsh/AGENTS.md` 标记块           | `~/.dsh/skills/ebisu-dsh/`             | 无原生 hook；主动上报 + 投影发现 |
+| Antigravity      | `~/.gemini/GEMINI.md` 标记块        | `~/.gemini/config/skills/ebisu-antigravity/` | `~/.gemini/config/hooks.json` |
 
-安装前备份改动文件并增量合并 hook；卸载只清除 Ebisu 管理的配置。用户改写过的 skill 会被保留并报告冲突，不会直接覆盖。Codex 没有声明 hook 开关时添加带标记的开关，显式禁用时显示“能力受限”并保留用户选择。DSH 不提供用户级生命周期 hook，设置页显示“能力受限”，由全局规则和 `ebisu-dsh` skill 主动上报；这不代表已取得原生事件保证。
+安装前备份改动文件并增量合并 hook；卸载只清除 Ebisu 管理的配置。用户改写过的 skill 会被保留并报告冲突，不会直接覆盖。Codex 没有声明 hook 开关时添加带标记的开关，显式禁用时显示“能力受限”并保留用户选择。Antigravity 的 hook 采用命名配置隔离（只管理 `ebisu-antigravity` 钩子项），在 stdout 严格输出 JSON `{}` 且不介入放行拦截，保护宿主决策。DSH 不提供用户级生命周期 hook，设置页显示“能力受限”，由全局规则和 `ebisu-dsh` skill 主动上报，同时由主进程只读解析会话投影（`session_facts`）补全标题、模型并自动发现活跃会话与等待状态。
+
+上报只是旁路观测，绝不构成任务的前置条件。当 Ebisu 未运行、服务端口不可达或运行时缺失时，主动上报脚本输出明确结论（`{"ok":false,"reason":"ebisu-not-running"}`）并以状态码 0 退出，原生 hook 保持输出为空并安全退出，保障终端任务不受任何干扰继续执行。
 
 “检查”验证通知工具能否连接本机服务，不伪造会话。设置页按配置写入结果显示“已安装／未安装”，连通性通过“检查”单独确认。受终端版本、托管策略、沙箱和模型执行规则影响，上报可能缺失；不会用终端品牌猜测当前模型，也不会无限产生虚假心跳。
 
@@ -139,7 +142,7 @@ Authorization: Bearer <runtime.json 中的 token>
   --path /Users/you/code/project --action enter --phase waiting
 ```
 
-需要取得会话 ID 时，先执行该工具的 `--new-session`：优先返回宿主提供的真实 ID，仅在缺失时生成 `local-` ID。把返回值保存在当前会话上下文中，随后始终通过 `--session` 复用。同一终端不同会话必须使用不同 ID。手动故障上报还须提供 `--model-error '宿主返回的接口错误原文'`，仅传 `--phase error` 会被忽略。
+需要取得会话 ID 时，先执行该工具的 `--new-session`：优先返回宿主提供的真实 ID，仅在缺失时生成 `local-` ID。把返回值保存在当前会话上下文中，随后始终通过 `--session` 复用。同一终端不同会话必须使用不同 ID。手动故障上报还须提供 `--model-error '宿主返回的接口错误原文'`，仅传 `--phase error` 会被忽略。服务未启动或不可达时，工具会明确返回 `{"ok":false,"reason":"ebisu-not-running"}` 并以 0 退出，绝不中断任务。
 
 技能接口使用同一服务发现与认证机制，通过 `POST /v1/skills/<action>` 提供技能创建、安装、上下文、经验和变量操作；绑定后提供的 `.ebisu/tools/skills` 客户端负责调用。高级参数、事件映射和错误码见[接口说明](docs/API.md)。
 
@@ -156,7 +159,7 @@ pnpm build
 
 better-sqlite3 按 Electron ABI 编译，`pnpm test` 使用 Electron 的 Node 模式运行 Vitest，不需要反复切换本机 Node ABI。更换 Electron 版本后执行 `pnpm rebuild`。
 
-端到端验收在 `pnpm build` 后运行，使用临时 HOME 和临时数据库，回放生命周期事件，校验实际终端探测、技能安装与文件查看、经验与变量管理、头像、深浅主题、托盘同步与驻留行为。不会在真实终端中发起模型任务，也不改动真实终端全局配置。截图写入忽略目录 `.smoke/`。
+端到端验收在 `pnpm build` 后运行，使用临时 HOME 和临时数据库，回放生命周期事件，校验八种终端的实际探测、原生 hook 与 camelCase 负载回放、命名 hook 隔离、技能安装与文件查看、经验与变量管理、头像、深浅主题、托盘同步与驻留行为。不会在真实终端中发起模型任务，也不改动真实终端全局配置。截图写入忽略目录 `.smoke/`。
 
 `pnpm test` 包含局域网配对确认、证书固定、请求过期与重放、离线缓存、设备隔离及技能导入校验；`pnpm test:smoke` 还会启动两个隔离的 Electron 实例，验收附近设备发现、配对确认弹窗、远端项目与会话、技能改名和预览编辑、导入、离线统计及解除配对。只需复测局域网界面时，可在构建后单独运行：
 
@@ -167,7 +170,7 @@ better-sqlite3 按 Electron ABI 编译，`pnpm test` 使用 Electron 的 Node �
 ## 目录结构
 
 ```text
-src/main/        SQLite、Git、路径匹配、终端集成、技能管理、HTTP、局域网互联与技能导入、Electron 生命周期
+src/main/        SQLite、Git、路径匹配、终端集成、DSH 会话投影发现、技能管理、HTTP、局域网互联与技能导入、Electron 生命周期
 src/preload/     受限业务 IPC 桥
 src/renderer/    Vue / Pinia / Naive UI 界面
 src/shared/      前后端共享协议类型

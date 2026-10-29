@@ -9,6 +9,17 @@
 - Qoder：[桌面 Hooks](https://docs.qoder.com/qoder/hooks)、[CLI Hooks](https://docs.qoder.com/cli/hooks)、[Skills](https://docs.qoder.com/cli/Skills)、[Memory](https://docs.qoder.com/cli/memory)。桌面和 CLI 共用用户级 settings hook 格式。
 - Qoder CN：本机 `Qoder CN.app` 与独立用户目录 `~/.qoder-cn`（`AGENTS.md`、`skills/`、`settings.json`）。桌面应用内置 CLI，不安装全局可执行文件，因此只按应用包探测；hook 事件形状与 Qoder 相同，并同样提供 `QODER_SESSION_ID`。设置页把两者放在同一 Qoder 图标下，分别显示探测与安装状态。
 - DeepSeek Harness（DSH）：本机 DeepSeek Harness 0.2.1-rc.3 内置包 `dsh-agent-instructions`、`dsh-skill-filesystem`、`dsh-shell-env` 的文档与实现；用户级规则为 `~/.dsh/AGENTS.md`，技能根为 `~/.dsh/skills`，模型 shell 会收到 `DSH_SESSION_ID`。该版本没有声明可供第三方安装的用户级生命周期 hook 配置。
+- Antigravity：本机 Antigravity 2.28.1 内置的 customization 指南（`hooks.md`、`rules.md`、`skills.md`）与 [Rules 文档](https://antigravity.google/docs/rules-workflows)。用户级自定义根为 `~/.gemini/config/`：技能在 `skills/`，hook 在 `hooks.json`；全局规则为 `~/.gemini/GEMINI.md`。按 `Antigravity.app` 或 `agy` CLI 探测。run_command 子进程会收到 `ANTIGRAVITY_CONVERSATION_ID`。
+
+### Antigravity hook 约束
+
+`hooks.json` 顶层是“钩子名 → 事件”映射，Ebisu 只写入并拥有 `ebisu-antigravity` 这一项；同名但不带 `--ebisu-owner=antigravity` 标记的配置视为用户内容，拒绝覆盖并回滚。用户对该项设置 `"enabled": false` 时重新安装会保留，设置页显示能力受限。
+
+负载使用 camelCase（`conversationId`、`workspacePaths`、`modelName`、`toolCall.args`），不含事件名，因此受管命令显式传入 `--event`。宿主要求 hook 在 stdout 输出 JSON，受管命令带 `--hook-json`，桥接与离线启动器在任何情况下都先输出 `{}`（不改变宿主决策）后 0 退出。hook 工作目录是 `~/.gemini/config`，项目目录只取自 `workspacePaths` 与工具参数中的路径。
+
+只注册 `PreInvocation`、`PostToolUse`、`Stop`。`PreToolUse` 必须返回 `allow/deny/ask` 决策，任一取值都会改变宿主权限流程，故不注册；Antigravity 也没有权限请求或通知事件，waiting 只能由规则驱动的主动上报产生。`PreInvocation` 每次模型调用都触发，仅本轮首个调用（`invocationNum ≤ 1`）视为用户提交，否则会覆盖模型刚上报、随后才输出提问的 waiting。`Stop` 在 `fullyIdle=false`（仍有后台任务，稍后会被唤醒）时不释放；`terminationReason=ERROR` 且带错误原文视为接口故障；`USER_CANCELED` 退出不保留 waiting；其他终止按软结束处理。`modelName` 为 `auto` 时视为未知模型。
+
+`~/.gemini/GEMINI.md` 同时会被 Gemini CLI 读取；Gemini CLI 不导出 `ANTIGRAVITY_CONVERSATION_ID`，若按规则上报会以 `local-` 身份记为 Antigravity 会话。
 
 Grok 兼容扫描 Claude 目录，因此 Claude hook 在检测到 Grok 原生环境时跳过；Grok 原生适配器负责上报。规则也要求只使用当前宿主终端的命令。各终端使用不同 skill 名称以免同名覆盖。DSH 同时扫描 `~/.agents/skills`，因此能看到 Codex 的 `ebisu-*` skill；DSH 自身的入口安装在更高优先级的 `~/.dsh/skills`，全局规则只要求使用 `ebisu-dsh`。
 
@@ -24,9 +35,13 @@ Qoder 的本机复现记录确认：skill 申请了 `local-` 临时 ID，原生 
 
 正常 Stop 释放执行状态；任务结果为失败、阻塞、未合并、检查未通过或需要后续处理时也按正常结束处理。Interrupt、SessionEnd 和显式 session 退出释放全部目录。Stop 保留明确的 waiting；StopFailure 仅在宿主明确报告模型接口故障时进入 error，error 不随退出、重启或十分钟租约消失，直到同项目收到新的 executing 上报。若宿主强制取消没有发出任何事件、且 agent 无法再执行退出命令，则依旧由十分钟租约兜底（error 不参与过期），不声称能立即感知所有强制停止。
 
-DSH 0.2.1-rc.3 不提供用户级生命周期 hook，适配器不写 hook 文件，设置页健康状态为“能力受限”。执行、waiting 和退出完全依赖全局规则与 `ebisu-dsh` skill 的主动上报；模型未执行规则、会话被强制结束或上报命令不可用时没有原生事件补偿，仍由十分钟租约兜底。安装成功或规则存在不等于已经收到真实事件。
+DSH 0.2.1-rc.3 不提供用户级生命周期 hook，适配器不写 hook 文件，设置页健康状态为“能力受限”。执行、waiting 和退出仍由全局规则与 `ebisu-dsh` skill 的主动上报驱动；主进程还会只读会话投影缓存发现运行中的会话（见下），因此模型没有按规则刷新心跳时，正在运行的会话也不会等到下一次上报才出现。上报命令不可用、会话被强制结束或投影超过租约窗口时仍由十分钟租约兜底。安装成功或规则存在不等于已经收到真实事件。
 
 DSH 手动上报未显式传入 `--model` / `--task-title` 时，通知桥按真实会话 ID 读取 `~/.dsh/storages/session_projcache/sessions/<sessionId>.json` 中的 `modelSelection.lastUsed` 与 `title` 字段补全模型和标题；只读这两项元数据，不读对话正文，也不从默认模型配置或终端品牌猜测当前模型。显式参数始终优先，缓存缺失或格式变化时保持模型未知。
+
+DSH 在会话刚开始时可能还没把投影写入磁盘，首次上报就会缺少模型，卡片因而没有角色背景。主进程生成展示快照时会按同一真实 ID 再读取一次投影，只补全仍为空的模型和标题；不修改上报记录、不延长租约，读取失败仍保持未知。显式上报值始终优先，非 DSH 会话不读取该缓存。
+
+主进程还会扫描投影目录发现仍在运行的 DSH 会话：回合尚未结束（存在 `turnBoundary.openTurnStartSeq` 且未收尾）、投影在十分钟内更新过、且 `identity.cwd`（或 `workingDirectory`）能匹配已注册目录时，会话直接补进项目面板；`userQuestions` 中仍有未回答的问题时显示为 waiting。发现结果只存在于展示快照，不写活动记录、不延长上报租约、也不创建新目录；回合结束或文件超出租约窗口后立即消失，避免保留崩溃或强退后的幽灵会话。已经上报的会话仍以活动记录为准，故障状态不会被发现逻辑覆盖；显式退出后的两分钟内投影写入不会复活会话（更晚开始的新回合仍会出现），投影损坏或工作目录不可访问时安静跳过。
 
 ## 安装与卸载
 
@@ -46,7 +61,7 @@ Codex 的 `features` 若使用行内表或特殊 dotted-key 写法，会保留�
 
 ## 已验证与未验证
 
-自动测试在临时 HOME 安装七种终端的配置：六种原生 hook 终端以对应形状的原生事件 JSON 回放到真实上报进程、HTTP 服务和 SQLite，覆盖等待、软结束、恢复、故障保留与清除、退出与兼容扫描，以及无身份环境变量时的 skill/hook 身份绑定、多目录释放、真实并发隔离和迟到 hook 不复活任务；DSH 单独验证规则/skill 安装、无 hook 文件、`DSH_SESSION_ID` 身份、会话投影补全模型/标题和手动 enter/waiting/exit 链路。
+自动测试在临时 HOME 安装八种终端的配置：六种原生 hook 终端以对应形状的原生事件 JSON 回放到真实上报进程、HTTP 服务和 SQLite，覆盖等待、软结束、恢复、故障保留与清除、退出与兼容扫描，以及无身份环境变量时的 skill/hook 身份绑定、多目录释放、真实并发隔离和迟到 hook 不复活任务；DSH 单独验证规则/skill 安装、无 hook 文件、`DSH_SESSION_ID` 身份、会话投影补全模型/标题和手动 enter/waiting/exit 链路。Antigravity 单独验证命名 hook 的安装、保留用户钩子、同名冲突回滚、显式禁用保留、`{}` 输出（含离线与应用缺失）、camelCase 负载回放的执行/等待保留/后台未空闲/退出/故障链路，以及上报命令自身 PostToolUse 的身份绑定。
 Electron 端到端测试使用当前真实文件系统探测安装位置，并在临时 HOME 通过界面安装和检查。开发时最初没有发现 Qoder，后续实机探测已发现 Qoder.app 0.4.8；新增的 Qoder CN 只按 `Qoder CN.app` 探测，与 Qoder 的安装记录互不影响，缺失终端分支由隔离 fixture 固定验证。
 
 没有在各第三方终端实际启动模型任务，所以不把事件回放视为“第三方运行时已经加载 hook”的证据。设置页显示安装状态，完成配置写入即显示“已安装”；这不代表第三方运行时已经加载 hook。服务端仍单独记录真实上报与健康状态；策略阻止加载、旧版本不支持事件或沙箱无法访问服务时，可通过“检查”和实际项目活动继续排查。
@@ -55,7 +70,7 @@ Electron 端到端测试使用当前真实文件系统探测安装位置，并�
 
 ## 技能管理入口
 
-七种宿主的技能目录由 `terminal-adapters.ts` 统一声明。绑定会同时安装活动通知技能和两个显式调用的管理技能；Codex 管理技能附带 `allow_implicit_invocation:false`。已有绑定首次升级时补齐，冲突保留原配置；未绑定宿主不自动安装。
+八种宿主的技能目录由 `terminal-adapters.ts` 统一声明。绑定会同时安装活动通知技能和两个显式调用的管理技能；Codex 管理技能附带 `allow_implicit_invocation:false`。已有绑定首次升级时补齐，冲突保留原配置；未绑定宿主不自动安装。
 
 业务技能只安装轻量 `SKILL.md` 及需要的宿主 UI 元数据，统一指向应用数据目录 `.ebisu/skills/<UUID>`；脚本、参考文档、初始上下文及共享工具不复制到宿主目录。入口文件继续按 manifest/hash 管理。解绑事务先移除业务入口，再卸载集成；任一冲突回滚入口与安装记录。中央技能、经验、终端变量保留，可在重新绑定后继续使用。
 

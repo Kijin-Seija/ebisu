@@ -563,9 +563,9 @@ it('HTTP 技能接口认证、请求校验、并发修订与初始内容不可�
   ).toBe(400)
 })
 
-it('管理技能随七种集成绑定安装；旧绑定补齐且重复升级不改动配置', () => {
+it('管理技能随八种集成绑定安装；旧绑定补齐且重复升级不改动配置', () => {
   mkdirSync(path.join(root, 'bin'))
-  for (const binary of ['codex', 'claude', 'workbuddy', 'grok', 'qodercli', 'dsh'])
+  for (const binary of ['codex', 'claude', 'workbuddy', 'grok', 'qodercli', 'dsh', 'agy'])
     writeFileSync(path.join(root, 'bin', binary), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
   // Qoder CN 桌面应用内置 CLI，只按应用包探测。
   mkdirSync(path.join(apps, 'Qoder CN.app/Contents'), { recursive: true })

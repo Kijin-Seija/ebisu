@@ -137,6 +137,7 @@ export class Integrations {
     const executable = quote(this.options.executable)
     const offline = activityBridge
       ? `case " $* " in
+  *--hook-json*) printf '{}\\n' ; exit 0 ;;
   *--hook*) exit 0 ;;
   *--new-session*) printf 'local-sh-%s\\n' "$(date +%s)$$" ; exit 0 ;;
   *--check*) printf '{"ok":false}' ; exit 0 ;;
@@ -158,13 +159,13 @@ ELECTRON_RUN_AS_NODE=1 exec ${executable} ${quote(`${client}.cjs`)} --runtime ${
 ## Ebisu 项目活动通知（始终适用）
 当本会话涉及本机文件夹（包括阅读、规划、执行）时，先调用通知 skill ebisu-${id}；上报只是旁路观测，任何情况下都不构成任务的前置条件。
 使用本机终端工具执行 ${command} --session 本会话ID --path /绝对目录 --action enter，已注册目录及其子目录会被监控，其他目录自动忽略。
-同一会话的每次上报必须复用真实会话 ID；可用时通过 --session 传入。上报工具会自动读取宿主的会话环境变量（Codex 为 CODEX_THREAD_ID 或 CODEX_SESSION_ID，DeepSeek Harness 为 DSH_SESSION_ID），不要因为不知道真实 ID 就另造临时身份。模型已知时用 --model 传入真实模型名，未知时省略。
+同一会话的每次上报必须复用真实会话 ID；可用时通过 --session 传入。上报工具会自动读取宿主的会话环境变量（Codex 为 CODEX_THREAD_ID 或 CODEX_SESSION_ID，DeepSeek Harness 为 DSH_SESSION_ID，Antigravity 为 ANTIGRAVITY_CONVERSATION_ID），不要因为不知道真实 ID 就另造临时身份。模型已知时用 --model 传入真实模型名，未知时省略。
 需要获取上报 ID 时执行 ${command} --new-session；该命令优先返回宿主真实 ID，仅在确实缺失时生成 local- ID。只申请一次，保存并在本会话所有通知中用 --session 复用返回值，不要在不同会话之间共享，也不要将终端名或模型名用作会话 ID。已有 local- ID 时继续传入，原生工具 hook 会将该命令中的临时 ID 绑定到真实身份；不要自行换成另一个 ID。缺少 ID 的请求不会创建活动。
 在涉及其他目录前也执行 enter；执行中至少每两分钟重复 enter 刷新心跳，长时间命令前后也刷新。
 需要向用户提问或等待确认前，执行 enter 并加 --phase waiting；继续执行用 --phase executing。
 任务到达任何终态（成功、失败、阻塞、未合并、检查未通过、部分完成或需要后续处理）都算本次执行正常结束；不要因为结果内容或交付状态执行 --phase error。此时必须执行 --action exit --scope session，释放此会话涉及的目录。
 只有宿主明确返回模型接口故障（例如 stream disconnected、服务过载、额度/鉴权服务错误），导致模型请求本身未能正常完成时，才执行 enter 并加 --phase error --model-error '宿主返回的接口错误原文'；没有实际接口错误信息时禁止上报 error。普通命令失败、测试失败、Git 未合并、审查 finding 和任务阻塞都不属于此类故障。故障状态会保留到下一次 executing 上报。
-上报命令任何情况都以 0 退出：成功返回 {"ok":true}；返回 {"ok":false,"reason":"ebisu-not-running"}、没有任何输出或非零退出都只说明 Ebisu 没有启动，不是任务失败。此时跳过本条和后续所有上报，立刻按原任务继续执行，绝不终止任务、不要求用户先启动 Ebisu、不自动启动 Ebisu、不重复重试。不要创建脱离会话持续运行的无限心跳进程。
+上报命令任何情况都以 0 退出：成功返回 {"ok":true}；返回 {"ok":false,"reason":"ebisu-not-running"}、没有任何输出或非零退出都只说明 Ebisu 没有启动，不是任务失败。此时只跳过本次上报，按原任务继续，绝不终止任务；后续到达检查点、需要等待或退出时仍按规则照常上报（不要求用户启动 Ebisu，也不自动启动 Ebisu），不得为补报阻塞任务，也不要反复重试同一条命令。不要创建脱离会话持续运行的无限心跳进程。
 此规则只负责本机活动上报，不授权提交、推送、发消息等其他操作。若同时加载了其他终端的 Ebisu 规则，只使用实际宿主终端对应的命令，勿重复执行。
 ${end}`
   }
@@ -252,28 +253,31 @@ ${end}`
           configuration === null
         )
           throw new Error('终端 hook 配置不是对象，未覆盖原配置')
-        const hooks = configuration.hooks ?? {}
-        if (typeof hooks !== 'object' || Array.isArray(hooks) || hooks === null)
-          throw new Error('已有 hooks 配置格式不受支持')
-        this.removeOwnedHooks(hooks, id)
-        for (const event of adapter.events) {
-          if (hooks[event] !== undefined && !Array.isArray(hooks[event]))
-            throw new Error(`已有 ${event} hook 格式不受支持`)
-          const entry: Record<string, unknown> = {
-            hooks: [
-              {
-                type: 'command',
-                command: `${quote(this.bridge)} --hook --terminal ${id} --ebisu-owner=${id}`,
-                timeout: 2
-              }
-            ]
+        if (adapter.hookFormat === 'named') this.writeNamedHook(configuration, id)
+        else {
+          const hooks = configuration.hooks ?? {}
+          if (typeof hooks !== 'object' || Array.isArray(hooks) || hooks === null)
+            throw new Error('已有 hooks 配置格式不受支持')
+          this.removeOwnedHooks(hooks, id)
+          for (const event of adapter.events) {
+            if (hooks[event] !== undefined && !Array.isArray(hooks[event]))
+              throw new Error(`已有 ${event} hook 格式不受支持`)
+            const entry: Record<string, unknown> = {
+              hooks: [
+                {
+                  type: 'command',
+                  command: this.hookCommand(id, event),
+                  timeout: 2
+                }
+              ]
+            }
+            if (event === 'Notification')
+              entry.matcher = 'permission_prompt|elicitation_dialog|agent_needs_input'
+            hooks[event] ??= []
+            hooks[event].push(entry)
           }
-          if (event === 'Notification')
-            entry.matcher = 'permission_prompt|elicitation_dialog|agent_needs_input'
-          hooks[event] ??= []
-          hooks[event].push(entry)
+          configuration.hooks = hooks
         }
-        configuration.hooks = hooks
         write(hookFile, `${JSON.stringify(configuration, null, 2)}\n`)
       }
       let codexFeatureAdded = manifest?.codexFeatureAdded ?? false
@@ -338,6 +342,63 @@ ${end}`
     }
   }
 
+  /**
+   * hook 命令以 --ebisu-owner 结尾作为所有权标记。named 形状（Antigravity）的负载不带事件名，
+   * 需显式传 --event；--hook-json 要求桥接在 hook 模式输出 `{}`，满足宿主的 JSON 输出约定。
+   */
+  private hookCommand(id: TerminalId, event: string): string {
+    const base = `${quote(this.bridge)} --hook --terminal ${id}`
+    return adapters[id].hookFormat === 'named'
+      ? `${base} --hook-json --event ${event} --ebisu-owner=${id}`
+      : `${base} --ebisu-owner=${id}`
+  }
+
+  /** named 形状中 Ebisu 独占的钩子名；其他钩子名始终原样保留。 */
+  private namedHookKey(id: TerminalId): string {
+    return `ebisu-${id}`
+  }
+
+  /** 收集 named 钩子中所有 handler 命令，兼容平铺事件与带 matcher 的分组事件。 */
+  private namedHookCommands(spec: unknown, event?: string): string[] {
+    if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) return []
+    const commands: string[] = []
+    for (const [key, entries] of Object.entries(spec as Record<string, unknown>)) {
+      if ((event && key !== event) || !Array.isArray(entries)) continue
+      for (const entry of entries as any[]) {
+        if (typeof entry?.command === 'string') commands.push(entry.command)
+        if (Array.isArray(entry?.hooks))
+          for (const handler of entry.hooks)
+            if (typeof handler?.command === 'string') commands.push(handler.command)
+      }
+    }
+    return commands
+  }
+
+  private ownsNamedHook(spec: unknown, id: TerminalId): boolean {
+    return this.namedHookCommands(spec).some((command) => command.endsWith(`--ebisu-owner=${id}`))
+  }
+
+  /**
+   * 整体替换 Ebisu 自己的钩子名；同名但不带所有权标记的配置视为用户内容，拒绝覆盖。
+   * 用户显式设置的 enabled:false 保留，与 Codex 显式禁用 hook 的处理一致。
+   */
+  private writeNamedHook(configuration: Record<string, any>, id: TerminalId): void {
+    const key = this.namedHookKey(id)
+    const existing = configuration[key]
+    if (existing !== undefined && !this.ownsNamedHook(existing, id))
+      throw new Error(`已有同名 hook「${key}」不是 Ebisu 管理的配置，未覆盖`)
+    const spec: Record<string, unknown> = {}
+    if (existing?.enabled === false) spec.enabled = false
+    for (const event of adapters[id].events) {
+      const handler = { type: 'command', command: this.hookCommand(id, event), timeout: 2 }
+      // 工具事件必须用 matcher 分组；其余生命周期事件为平铺 handler 列表。
+      spec[event] = ['PreToolUse', 'PostToolUse'].includes(event)
+        ? [{ matcher: '*', hooks: [handler] }]
+        : [handler]
+    }
+    configuration[key] = spec
+  }
+
   upgradeSkills(): void {
     for (const id of terminalIds) {
       const row = this.store.integration(id)
@@ -392,7 +453,14 @@ ${end}`
       if (existsSync(owned.file) && hash(read(owned.file)) !== owned.hash)
         throw new Error(`skill 已被手动修改，保留文件：${owned.file}`)
     }
-    if (hookConfig?.hooks) {
+    if (adapters[id].hookFormat === 'named') {
+      // 只删除仍带所有权标记的钩子名；用户改写过的同名配置保留。
+      const key = this.namedHookKey(id)
+      if (hookConfig && this.ownsNamedHook(hookConfig[key], id)) {
+        delete hookConfig[key]
+        writeFileSync(manifest.hookFile!, `${JSON.stringify(hookConfig, null, 2)}\n`)
+      }
+    } else if (hookConfig?.hooks) {
       this.removeOwnedHooks(hookConfig.hooks, id)
       if (!Object.keys(hookConfig.hooks).length) delete hookConfig.hooks
       writeFileSync(manifest.hookFile!, `${JSON.stringify(hookConfig, null, 2)}\n`)
@@ -436,20 +504,30 @@ ${end}`
           ) &&
           read(manifest.rule).includes(this.ruleText(id))
         let hookIntact = true
+        let disabled = false
         if (manifest.hookFile) {
           try {
-            const hooks = JSON.parse(read(manifest.hookFile)).hooks
-            const expectedCommand = `${quote(this.bridge)} --hook --terminal ${id} --ebisu-owner=${id}`
-            hookIntact = adapters[id].events.every((event) =>
-              hooks?.[event]?.some((group: any) =>
-                group.hooks?.some((handler: any) => handler.command === expectedCommand)
+            const configuration = JSON.parse(read(manifest.hookFile))
+            if (adapters[id].hookFormat === 'named') {
+              const spec = configuration?.[this.namedHookKey(id)]
+              hookIntact = adapters[id].events.every((event) =>
+                this.namedHookCommands(spec, event).includes(this.hookCommand(id, event))
               )
-            )
+              disabled = spec?.enabled === false
+            } else {
+              const hooks = configuration.hooks
+              hookIntact = adapters[id].events.every((event) =>
+                hooks?.[event]?.some((group: any) =>
+                  group.hooks?.some(
+                    (handler: any) => handler.command === this.hookCommand(id, event)
+                  )
+                )
+              )
+            }
           } catch {
             hookIntact = false
           }
         }
-        let disabled = false
         if (id === 'codex') {
           try {
             const config = TOML.parse(read(path.join(this.home, '.codex/config.toml'))) as {
