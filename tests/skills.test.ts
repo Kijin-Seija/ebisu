@@ -23,6 +23,7 @@ import type { SkillPackage } from '../src/shared/skills'
 const execute = promisify(execFile)
 let root: string
 let home: string
+let apps: string
 let store: Store
 let skills: Skills
 let integrations: Integrations
@@ -63,7 +64,9 @@ beforeEach(() => {
   decrypted = []
   root = mkdtempSync(path.join(tmpdir(), 'ebisu skills-'))
   home = path.join(root, 'home')
+  apps = path.join(root, 'Applications')
   mkdirSync(home)
+  mkdirSync(apps)
   store = new Store(path.join(root, 'state.sqlite'))
   for (const name of ['first', 'second']) mkdirSync(path.join(root, name))
   first = store.addFolder(path.join(root, 'first'))
@@ -73,7 +76,7 @@ beforeEach(() => {
     dataDirectory: root,
     resources,
     executable: process.execPath,
-    appDirectories: [],
+    appDirectories: [apps],
     pathEnv: path.join(root, 'bin')
   })
   skills = new Skills(store, {
@@ -132,7 +135,7 @@ it('拒绝相对路径越界、反斜杠、符号链接和无效 frontmatter', (
   symlinkSync(first.path, path.join(terminalRoot, 'skills'))
   expect(() => skills.install('sample-skill', 'claude')).toThrow('符号链接')
 })
-it('六种终端只安装轻量入口，卸载不删除中央脚本、经验或配置', () => {
+it('七种终端只安装轻量入口，卸载不删除中央脚本、经验或配置', () => {
   const result = create()
   const experience = skills.addExperience({
     skillId: result.id,
@@ -560,10 +563,13 @@ it('HTTP 技能接口认证、请求校验、并发修订与初始内容不可�
   ).toBe(400)
 })
 
-it('管理技能随六种集成绑定安装；旧绑定补齐且重复升级不改动配置', () => {
+it('管理技能随七种集成绑定安装；旧绑定补齐且重复升级不改动配置', () => {
   mkdirSync(path.join(root, 'bin'))
   for (const binary of ['codex', 'claude', 'workbuddy', 'grok', 'qodercli', 'dsh'])
     writeFileSync(path.join(root, 'bin', binary), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  // Qoder CN 桌面应用内置 CLI，只按应用包探测。
+  mkdirSync(path.join(apps, 'Qoder CN.app/Contents'), { recursive: true })
+  writeFileSync(path.join(apps, 'Qoder CN.app/Contents/Info.plist'), '<plist/>')
   for (const host of terminalIds) {
     store.saveManifest(host, null)
     integrations.install(host)

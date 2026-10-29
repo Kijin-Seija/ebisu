@@ -5,6 +5,7 @@ import { RefreshCw, Download, Trash2, ImagePlus, Info } from 'lucide-vue-next'
 import { useDashboard } from '../store'
 import LanSettings from './LanSettings.vue'
 import {
+  terminalIconId,
   terminalIds,
   terminalNames,
   type AvatarKey,
@@ -35,11 +36,14 @@ const avatarItems: { key: AvatarKey; label: string }[] = [
       grok: 'Grok'
     }[key]
   })),
-  ...terminalIds.map((key) => ({
-    key: `terminal:${key}` as AvatarKey,
-    // 头像格子空间有限，DSH 使用短名称，避免折行；其他界面仍显示完整名称。
-    label: key === 'dsh' ? 'DSH' : terminalNames[key]
-  }))
+  ...terminalIds
+    // Qoder CN 与 Qoder 共用商标和自定义素材，不重复提供头像格子。
+    .filter((key) => terminalIconId(key) === key)
+    .map((key) => ({
+      key: `terminal:${key}` as AvatarKey,
+      // 头像格子空间有限，DSH 使用短名称，避免折行；其他界面仍显示完整名称。
+      label: key === 'dsh' ? 'DSH' : terminalNames[key]
+    }))
 ]
 const allAvatarItems = [
   ...avatarItems,
@@ -53,6 +57,16 @@ const allAvatarItems = [
 const installedCount = computed(
   () => dashboard.snapshot?.integrations.filter((item) => item.installed).length ?? 0
 )
+/** 同一商标的发行版共用一个图标；每行仍独立展示探测与安装状态。 */
+const integrationGroups = computed(() => {
+  const groups = new Map<IntegrationView['icon'], IntegrationView[]>()
+  for (const item of dashboard.snapshot?.integrations ?? []) {
+    const rows = groups.get(item.icon)
+    if (rows) rows.push(item)
+    else groups.set(item.icon, [item])
+  }
+  return [...groups].map(([icon, rows]) => ({ icon, rows }))
+})
 async function run(
   key: string,
   operation: () => Promise<unknown>,
@@ -102,72 +116,80 @@ function uninstall(item: IntegrationView): void {
     </div>
   </div>
   <div class="integration-list">
-    <div
-      v-for="item in dashboard.snapshot?.integrations"
-      :key="item.id"
-      class="integration-row"
-      :data-terminal="item.id"
-    >
+    <div v-for="group in integrationGroups" :key="group.icon" class="integration-group">
       <img
-        :src="`ebisu-asset://avatar/terminal/${item.id}?v=${dashboard.revision}`"
-        :alt="item.name"
+        :src="`ebisu-asset://avatar/terminal/${group.icon}?v=${dashboard.revision}`"
+        :alt="terminalNames[group.icon]"
         class="terminal-icon"
       />
-      <div class="integration-info">
-        <div class="integration-name">
-          <strong>{{ item.name }}</strong
-          ><span class="detected-label" :class="{ missing: !item.detected }"
-            ><span class="status-dot" :class="item.detected ? 'green' : 'gray'"></span
-            >{{ item.detected ? '已检测到' : '未安装' }}</span
-          >
+      <div class="integration-group-rows">
+        <div
+          v-for="item in group.rows"
+          :key="item.id"
+          class="integration-row"
+          :data-terminal="item.id"
+        >
+          <div class="integration-info">
+            <div class="integration-name">
+              <strong>{{ item.name }}</strong
+              ><span class="detected-label" :class="{ missing: !item.detected }"
+                ><span class="status-dot" :class="item.detected ? 'green' : 'gray'"></span
+                >{{ item.detected ? '已检测到' : '未安装' }}</span
+              >
+            </div>
+            <n-tooltip v-if="item.evidence.length" :delay="600"
+              ><template #trigger
+                ><span class="integration-evidence">{{ item.evidence[0] }}</span></template
+              >
+              <div v-for="evidence in item.evidence" :key="evidence">
+                {{ evidence }}
+              </div></n-tooltip
+            >
+          </div>
+          <span class="installation-badge" :class="{ installed: item.installed }">{{
+            item.installed ? '已安装' : '未安装'
+          }}</span>
+          <div class="integration-actions">
+            <template v-if="item.installed"
+              ><n-button
+                size="small"
+                :disabled="!!pending"
+                :loading="pending === `${item.id}:check`"
+                @click="run(`${item.id}:check`, () => api.check(item.id))"
+                >检查</n-button
+              ><n-button
+                v-if="item.health === 'damaged'"
+                size="small"
+                :disabled="!!pending || !item.detected"
+                @click="
+                  run(
+                    `${item.id}:install`,
+                    () => api.install(item.id),
+                    '配置已更新，请重启已有会话'
+                  )
+                "
+                >修复</n-button
+              ><n-button
+                quaternary
+                size="small"
+                :disabled="!!pending"
+                :loading="pending === `${item.id}:uninstall`"
+                :title="`卸载 ${item.name} 集成`"
+                @click="uninstall(item)"
+                ><Trash2 :size="15" /></n-button></template
+            ><n-button
+              v-else
+              size="small"
+              :type="item.detected ? 'primary' : 'default'"
+              :disabled="!item.detected || !!pending"
+              :loading="pending === `${item.id}:install`"
+              @click="
+                run(`${item.id}:install`, () => api.install(item.id), '集成已安装，请重启已有会话')
+              "
+              ><template #icon><Download :size="14" /></template>安装集成</n-button
+            >
+          </div>
         </div>
-        <n-tooltip v-if="item.evidence.length" :delay="600"
-          ><template #trigger
-            ><span class="integration-evidence">{{ item.evidence[0] }}</span></template
-          >
-          <div v-for="evidence in item.evidence" :key="evidence">
-            {{ evidence }}
-          </div></n-tooltip
-        >
-      </div>
-      <span class="installation-badge" :class="{ installed: item.installed }">{{
-        item.installed ? '已安装' : '未安装'
-      }}</span>
-      <div class="integration-actions">
-        <template v-if="item.installed"
-          ><n-button
-            size="small"
-            :disabled="!!pending"
-            :loading="pending === `${item.id}:check`"
-            @click="run(`${item.id}:check`, () => api.check(item.id))"
-            >检查</n-button
-          ><n-button
-            v-if="item.health === 'damaged'"
-            size="small"
-            :disabled="!!pending || !item.detected"
-            @click="
-              run(`${item.id}:install`, () => api.install(item.id), '配置已更新，请重启已有会话')
-            "
-            >修复</n-button
-          ><n-button
-            quaternary
-            size="small"
-            :disabled="!!pending"
-            :loading="pending === `${item.id}:uninstall`"
-            :title="`卸载 ${item.name} 集成`"
-            @click="uninstall(item)"
-            ><Trash2 :size="15" /></n-button></template
-        ><n-button
-          v-else
-          size="small"
-          :type="item.detected ? 'primary' : 'default'"
-          :disabled="!item.detected || !!pending"
-          :loading="pending === `${item.id}:install`"
-          @click="
-            run(`${item.id}:install`, () => api.install(item.id), '集成已安装，请重启已有会话')
-          "
-          ><template #icon><Download :size="14" /></template>安装集成</n-button
-        >
       </div>
     </div>
   </div>

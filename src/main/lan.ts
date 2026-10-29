@@ -1,6 +1,6 @@
 import { createServer, request, Agent, type Server, type RequestOptions } from 'node:https'
 import { connect, type TLSSocket } from 'node:tls'
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { hostname, networkInterfaces } from 'node:os'
 import { isIP } from 'node:net'
@@ -9,7 +9,13 @@ import path from 'node:path'
 import { Bonjour, type Browser, type Service } from 'bonjour-service'
 import { generate } from 'selfsigned'
 import { z } from 'zod'
-import type { DeviceIdentity, LanView, SharedSnapshot, SkillExport } from '../shared/lan'
+import type {
+  DeviceIdentity,
+  LanView,
+  PairOutcome,
+  SharedSnapshot,
+  SkillExport
+} from '../shared/lan'
 import { activityPhases, terminalIds } from '../shared/types'
 import { packageSchema, SkillError, type Skills } from './skills'
 import type { Store } from './database'
@@ -17,6 +23,12 @@ import { SkillTransfer, packageHash } from './skill-transfer'
 
 const PROTOCOL = 1
 const MAX_BODY = 12 * 1024 * 1024
+/** 配对请求与确认结果的有效期；过期后双方都必须重新发起。 */
+const PAIR_TTL = 300_000
+/** 单次 IPC 等待对方确认的时长；超时后后台仍会在有效期内继续完成配对。 */
+const PAIR_WAIT = 60_000
+/** 同时展示的待确认请求上限，避免发现到的设备批量占据界面。 */
+const MAX_PAIR_REQUESTS = 8
 const identitySchema = z.object({
   id: z.string().uuid(),
   name: z.string().trim().min(1).max(100),
@@ -30,7 +42,7 @@ const addressSchema = z
     try {
       const url = new URL(`https://${address}`)
       const host = url.hostname.replace(/^\[|\]$/g, '')
-      // 局域网功能不接受域名、凭据、路径和公网目标，避免邀请串成为通用网络代理。
+      // 局域网功能不接受域名、凭据、路径和公网目标，避免配对信息成为通用网络代理。
       return (
         url.host === address &&
         !url.username &&
@@ -119,11 +131,37 @@ interface Peer {
   snapshot: SharedSnapshot | null
   error?: string
 }
+interface PairRequest {
+  id: string
+  device: DeviceIdentity
+  address: string
+  /** 对端 TLS 客户端证书指纹；不接受请求体自报的指纹。 */
+  fingerprint: string
+  expires: number
+}
+interface ResolvedPairRequest {
+  status: 'accepted' | 'declined'
+  fingerprint: string
+  expires: number
+}
+interface OutgoingPairRequest {
+  id: string
+  deviceId: string
+  address: string
+  fingerprint: string
+  expires: number
+  /** 等待对方确认的调用方；结果只用于界面提示，配对成功后由快照驱动。 */
+  waiters: Set<(outcome: PairOutcome) => void>
+  outcome?: PairOutcome
+  checking?: Promise<void>
+}
 interface Options {
   directory: string
   snapshot: () => Promise<Pick<SharedSnapshot, 'folders' | 'skills'>>
   changed: () => void
   now?: () => number
+  /** 有新配对请求时由宿主把主窗口带到前台，弹窗不能藏在后台窗口里。 */
+  request?: () => void
   /** 测试可以关闭真实组播，但 HTTPS 通信仍走真实 socket。 */
   discovery?: boolean
 }
@@ -137,7 +175,10 @@ export class Lan {
   private port: number | null = null
   private error?: string
   private peers = new Map<string, Peer>()
-  private discovered = new Map<string, DeviceIdentity & { address: string }>()
+  private discovered = new Map<
+    string,
+    DeviceIdentity & { address: string; fingerprint: string | null }
+  >()
   private candidates = new Map<string, string>()
   private refreshes = new Map<string, Promise<void>>()
   private sockets = new Set<Duplex>()
@@ -148,7 +189,12 @@ export class Lan {
   private timer?: ReturnType<typeof setInterval>
   private polling?: Promise<void>
   private pendingRequests = new Set<ReturnType<typeof request>>()
-  private invitation?: { token: string; expires: number }
+  /** 等待本机用户确认的请求；只在内存中保存，关闭共享或重启后失效。 */
+  private pairRequests = new Map<string, PairRequest>()
+  /** 已确认/拒绝的结果供发起方轮询一次，保留到请求有效期结束。 */
+  private resolvedPairs = new Map<string, ResolvedPairRequest>()
+  /** 本机发起、仍在等待对方确认的请求，按目标设备去重。 */
+  private outgoingPairs = new Map<string, OutgoingPairRequest>()
   private configuring: Promise<unknown> = Promise.resolve()
   private now: () => number
   constructor(
@@ -231,13 +277,18 @@ export class Lan {
     )
   }
   view(): LanView {
+    const now = this.now()
     return {
       enabled: this.enabled,
       device: this.device(),
       port: this.port,
       addresses: this.addresses(),
       error: this.error,
-      discovered: [...this.discovered.values()],
+      // 已配对设备不再出现在附近设备里，解除配对后会随发现信息重新出现。
+      discovered: [...this.discovered.values()].filter((device) => !this.peers.has(device.id)),
+      requests: [...this.pairRequests.values()]
+        .filter((request) => request.expires > now)
+        .map(({ id, device, address, expires }) => ({ id, device, address, expires })),
       peers: [...this.peers.values()].map((peer) => ({
         ...peer.device,
         address: peer.address,
@@ -245,7 +296,7 @@ export class Lan {
           this.enabled &&
           !!this.server &&
           peer.lastSeen !== null &&
-          this.now() - peer.lastSeen < 15000 &&
+          now - peer.lastSeen < 15000 &&
           peer.device.protocol === PROTOCOL,
         lastSeen: peer.lastSeen,
         error: peer.error,
@@ -324,44 +375,92 @@ export class Lan {
             if (!cert.raw) throw new SkillError(401, '需要设备证书')
             const remoteFingerprint = fingerprint(cert.raw)
             const url = req.url ?? ''
-            if (req.method === 'POST' && url === '/lan/v1/pair') {
+            const readJson = async (limit: number): Promise<unknown> => {
               if (!req.headers['content-type']?.startsWith('application/json'))
                 throw new SkillError(415, '需要 JSON')
               const chunks: Buffer[] = []
               let bytes = 0
               for await (const chunk of req) {
                 bytes += chunk.length
-                if (bytes > 4096) throw new SkillError(413, '请求过大')
+                if (bytes > limit) throw new SkillError(413, '请求过大')
                 chunks.push(chunk)
               }
+              return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+            }
+            // 配对入口不要求已配对证书，但必须由本机用户确认后才建立信任。
+            if (req.method === 'POST' && url === '/lan/v1/pair-request') {
               const data = z
                 .object({
                   device: identitySchema,
-                  address: addressSchema,
-                  token: z.string().max(128)
+                  request: z.string().uuid(),
+                  address: addressSchema
                 })
                 .strict()
-                .parse(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+                .parse(await readJson(4096))
               if (data.device.protocol !== PROTOCOL)
                 throw new SkillError(409, '协议版本不兼容，请升级 Ebisu')
-              const invite = this.invitation
-              if (!invite || invite.expires <= this.now() || !equal(data.token, invite.token))
-                throw new SkillError(401, '邀请无效或已过期')
               if (data.device.id === this.identity.id) throw new SkillError(400, '不能与自己配对')
               const previous = this.peers.get(data.device.id)
-              if (previous && previous.fingerprint !== remoteFingerprint)
-                throw new SkillError(409, '设备身份已变化，请先解除旧配对')
-              this.invitation = undefined
-              this.savePeer({
+              if (previous) {
+                if (previous.fingerprint !== remoteFingerprint)
+                  throw new SkillError(409, '设备身份已变化，请先解除旧配对')
+                // 对方丢失配对状态时直接确认，避免已配对设备反复弹窗。
+                send(200, { status: 'paired', device: this.device() })
+                return
+              }
+              const port = new URL(`https://${data.address}`).port
+              if (!port) throw new SkillError(400, '设备地址无效')
+              // 请求 ID 由发起方生成；不能覆盖其他设备的待确认请求。
+              const conflict = this.pairRequests.get(data.request)
+              if (conflict && conflict.device.id !== data.device.id)
+                throw new SkillError(409, '配对请求标识冲突，请重新发起')
+              // 同一设备只保留最新请求，避免重复点击堆积多个弹窗。
+              for (const [id, request] of this.pairRequests)
+                if (request.device.id === data.device.id) this.pairRequests.delete(id)
+              if (this.pairRequests.size >= MAX_PAIR_REQUESTS)
+                throw new SkillError(429, '待处理配对请求过多，请稍后再试')
+              // 回连地址优先采用真实来源 IP，避免对端多网卡时上报不可达地址。
+              const source = connectionHost((req.socket as TLSSocket).remoteAddress)
+              this.pairRequests.set(data.request, {
+                id: data.request,
                 device: data.device,
-                address: data.address,
+                address: source ? `${source}:${port}` : data.address,
                 fingerprint: remoteFingerprint,
-                lastSeen: null,
-                snapshot: null
+                expires: this.now() + PAIR_TTL
               })
-              send(200, { device: this.device() })
+              send(200, { status: 'pending', device: this.device() })
               this.options.changed()
+              try {
+                this.options.request?.()
+              } catch {
+                /* 唤醒窗口失败不影响请求，用户仍可手动打开设置。 */
+              }
               return
+            }
+            if (req.method === 'POST' && url === '/lan/v1/pair-status') {
+              const data = z
+                .object({ request: z.string().uuid() })
+                .strict()
+                .parse(await readJson(1024))
+              const pending = this.pairRequests.get(data.request)
+              if (
+                pending &&
+                pending.fingerprint === remoteFingerprint &&
+                pending.expires > this.now()
+              ) {
+                send(200, { status: 'pending', device: this.device() })
+                return
+              }
+              const resolved = this.resolvedPairs.get(data.request)
+              if (
+                resolved &&
+                resolved.fingerprint === remoteFingerprint &&
+                resolved.expires > this.now()
+              ) {
+                send(200, { status: resolved.status, device: this.device() })
+                return
+              }
+              throw new SkillError(401, '配对请求不存在或已过期')
             }
             const peer = [...this.peers.values()].find(
               (item) => item.fingerprint === remoteFingerprint
@@ -421,7 +520,7 @@ export class Lan {
     if (this.options.discovery !== false) {
       try {
         this.bonjour = new Bonjour({}, (error: Error) => {
-          this.error = `设备发现不可用，可手动连接：${String(error)}`
+          this.error = `设备发现不可用，请检查局域网与防火墙设置：${String(error)}`
           this.options.changed()
         })
         this.publication = this.bonjour.publish({
@@ -429,7 +528,13 @@ export class Lan {
           type: 'ebisu',
           protocol: 'tcp',
           port: this.port,
-          txt: { id: this.identity.id, name: this.identity.name, protocol: String(PROTOCOL) }
+          // 证书指纹随发现广播，配对前必须先固定对端证书，避免明文发现信息直接建立信任。
+          txt: {
+            id: this.identity.id,
+            name: this.identity.name,
+            protocol: String(PROTOCOL),
+            fingerprint: this.identity.fingerprint
+          }
         })
         this.publication.on('error', (error: Error) => {
           this.error = String(error)
@@ -444,7 +549,7 @@ export class Lan {
           this.options.changed()
         })
       } catch (error) {
-        this.error = `自动发现不可用，请手动连接：${String(error)}`
+        this.error = `自动发现不可用，请检查局域网与防火墙设置：${String(error)}`
       }
     }
     this.timer = setInterval(() => {
@@ -458,6 +563,7 @@ export class Lan {
       name: service.txt?.name,
       protocol: Number(service.txt?.protocol)
     })
+    const pin = fingerprintSchema.safeParse(service.txt?.fingerprint)
     const host = service.addresses?.find((item) => isIP(item) === 4 && isLocalAddress(item))
     if (
       !this.enabled ||
@@ -468,7 +574,12 @@ export class Lan {
     )
       return
     const address = `${host}:${service.port}`
-    this.discovered.set(parsed.data.id, { ...parsed.data, address })
+    this.discovered.set(parsed.data.id, {
+      ...parsed.data,
+      address,
+      // 旧版本不广播指纹；这类设备会出现在列表里但不能发起配对。
+      fingerprint: pin.success ? pin.data : null
+    })
     const peer = this.peers.get(parsed.data.id)
     // 发现信息只提供候选地址；取得已配对证书认证后才持久化地址与身份。
     if (peer && address !== peer.address) {
@@ -477,58 +588,204 @@ export class Lan {
     }
     this.options.changed()
   }
-  invitationString(address?: string): string {
+  /**
+   * 向附近设备发起配对，等待对方确认后保存对端身份。
+   * 返回 paired 表示完成；declined 表示对方拒绝；pending 表示等待超时，
+   * 后台仍会在请求有效期内继续完成，成功后通过快照更新体现。
+   */
+  async requestPair(deviceId: string): Promise<PairOutcome> {
+    const id = z.string().uuid().parse(deviceId)
     if (!this.enabled || !this.port) throw new SkillError(409, '请先开启局域网共享')
-    const selected = addressSchema.parse(address || this.addresses()[0])
-    if (new URL(`https://${selected}`).port !== String(this.port))
-      throw new SkillError(400, '请选择本机服务地址')
-    this.invitation = { token: randomBytes(32).toString('hex'), expires: this.now() + 300_000 }
-    return `ebisu-pair:${Buffer.from(JSON.stringify({ device: this.device(), address: selected, fingerprint: this.identity.fingerprint, ...this.invitation })).toString('base64url')}`
+    if (this.peers.has(id)) throw new SkillError(409, '该设备已配对')
+    let entry = this.outgoingPairs.get(id)
+    if (entry && entry.expires <= this.now()) {
+      this.settleOutgoing(entry, 'pending')
+      entry = undefined
+    }
+    if (!entry) {
+      const target = this.discovered.get(id)
+      if (!target) throw new SkillError(404, '附近没有这台设备，请确认双方已开启共享')
+      if (target.protocol !== PROTOCOL)
+        throw new SkillError(409, '对方协议版本不兼容，请升级 Ebisu')
+      if (!target.fingerprint) throw new SkillError(409, '对方版本不支持请求配对，请升级 Ebisu')
+      const request: OutgoingPairRequest = {
+        id: randomUUID(),
+        deviceId: id,
+        address: target.address,
+        fingerprint: target.fingerprint,
+        expires: this.now() + PAIR_TTL,
+        waiters: new Set()
+      }
+      this.outgoingPairs.set(id, request)
+      entry = request
+      try {
+        const response = await this.fetch(
+          request.address,
+          request.fingerprint,
+          '/lan/v1/pair-request',
+          {
+            device: this.device(),
+            request: request.id,
+            address: this.addresses()[0] || `127.0.0.1:${this.port}`
+          }
+        )
+        const result = z
+          .object({
+            status: z.enum(['pending', 'paired']),
+            device: identitySchema
+          })
+          .parse(response.body)
+        if (result.status === 'paired') {
+          await this.completeOutgoing(request, result.device)
+          return 'paired'
+        }
+      } catch (error) {
+        if (this.outgoingPairs.get(id) === request) this.outgoingPairs.delete(id)
+        throw error
+      }
+      this.options.changed()
+    }
+    return this.waitOutgoing(entry)
   }
-  async pair(invitation: string, override?: string): Promise<void> {
-    if (!this.enabled || !this.port) throw new SkillError(409, '请先开启局域网共享')
-    if (!invitation.startsWith('ebisu-pair:') || invitation.length > 4096)
-      throw new SkillError(400, '邀请格式无效')
-    const parsed = z
-      .object({
-        device: identitySchema,
-        address: addressSchema,
-        fingerprint: fingerprintSchema,
-        token: z.string().regex(/^[a-f0-9]{64}$/),
-        expires: z.number()
+  /** 本机用户确认或拒绝请求；请求已过期或已被处理时返回 404。 */
+  async respondPair(requestId: string, accept: boolean): Promise<void> {
+    const id = z.string().uuid().parse(requestId)
+    const request = this.pairRequests.get(id)
+    if (!request) throw new SkillError(404, '配对请求不存在或已过期')
+    this.pairRequests.delete(id)
+    if (request.expires <= this.now()) {
+      this.options.changed()
+      throw new SkillError(410, '配对请求已过期')
+    }
+    const existing = this.peers.get(request.device.id)
+    if (accept && existing && existing.fingerprint !== request.fingerprint) {
+      this.resolvedPairs.set(id, {
+        status: 'declined',
+        fingerprint: request.fingerprint,
+        expires: this.now() + PAIR_TTL
       })
-      .parse(JSON.parse(Buffer.from(invitation.slice(11), 'base64url').toString('utf8')))
-    if (parsed.device.protocol !== PROTOCOL)
-      throw new SkillError(409, '协议版本不兼容，请升级 Ebisu')
-    if (parsed.device.id === this.identity.id) throw new SkillError(400, '不能与自己配对')
-    const old = this.peers.get(parsed.device.id)
-    if (old && old.fingerprint !== parsed.fingerprint)
+      this.options.changed()
       throw new SkillError(409, '设备身份已变化，请先解除旧配对')
-    const address = override ? addressSchema.parse(override) : parsed.address
-    const response = await this.fetch(address, parsed.fingerprint, '/lan/v1/pair', {
-      device: this.device(),
-      token: parsed.token,
-      address: this.addresses()[0] || `127.0.0.1:${this.port}`
+    }
+    this.resolvedPairs.set(id, {
+      status: accept ? 'accepted' : 'declined',
+      fingerprint: request.fingerprint,
+      expires: this.now() + PAIR_TTL
     })
-    const device = identitySchema.parse((response.body as { device: unknown }).device)
-    if (device.id !== parsed.device.id || device.protocol !== PROTOCOL)
+    if (!accept) {
+      this.options.changed()
+      return
+    }
+    const peer: Peer = existing ?? {
+      device: request.device,
+      fingerprint: request.fingerprint,
+      address: request.address,
+      lastSeen: null,
+      snapshot: null
+    }
+    peer.device = request.device
+    peer.address = request.address
+    this.savePeer(peer)
+    this.options.changed()
+    await this.refreshPeer(peer)
+  }
+  private waitOutgoing(entry: OutgoingPairRequest): Promise<PairOutcome> {
+    if (entry.outcome) return Promise.resolve(entry.outcome)
+    return new Promise((resolve) => {
+      const waiter = (outcome: PairOutcome) => {
+        clearTimeout(timer)
+        resolve(outcome)
+      }
+      const timer = setTimeout(() => {
+        entry.waiters.delete(waiter)
+        resolve('pending')
+      }, PAIR_WAIT)
+      entry.waiters.add(waiter)
+      if (entry.outcome) {
+        entry.waiters.delete(waiter)
+        clearTimeout(timer)
+        resolve(entry.outcome)
+      }
+    })
+  }
+  private settleOutgoing(entry: OutgoingPairRequest, outcome: PairOutcome): void {
+    if (this.outgoingPairs.get(entry.deviceId) === entry) this.outgoingPairs.delete(entry.deviceId)
+    entry.outcome = outcome
+    for (const waiter of entry.waiters) waiter(outcome)
+    entry.waiters.clear()
+  }
+  private async completeOutgoing(
+    entry: OutgoingPairRequest,
+    device: DeviceIdentity
+  ): Promise<void> {
+    if (device.id !== entry.deviceId || device.protocol !== PROTOCOL)
       throw new SkillError(401, '设备身份不匹配')
+    if (this.outgoingPairs.get(entry.deviceId) !== entry) return
     const peer: Peer = {
       device,
-      address,
-      fingerprint: parsed.fingerprint,
+      address: entry.address,
+      fingerprint: entry.fingerprint,
       lastSeen: null,
       snapshot: null
     }
     this.savePeer(peer)
+    this.settleOutgoing(entry, 'paired')
     await this.refreshPeer(peer)
     this.options.changed()
+  }
+  /** 检查本机发起的配对是否已被对方处理；网络瞬断时不结束请求。 */
+  private checkOutgoing(entry: OutgoingPairRequest): Promise<void> {
+    if (entry.checking) return entry.checking
+    entry.checking = (async () => {
+      if (this.now() >= entry.expires) {
+        this.settleOutgoing(entry, 'pending')
+        return
+      }
+      try {
+        const response = await this.fetch(entry.address, entry.fingerprint, '/lan/v1/pair-status', {
+          request: entry.id
+        })
+        const result = z
+          .object({
+            status: z.enum(['pending', 'accepted', 'declined']),
+            device: identitySchema
+          })
+          .parse(response.body)
+        if (result.status === 'accepted') await this.completeOutgoing(entry, result.device)
+        else if (result.status === 'declined') this.settleOutgoing(entry, 'declined')
+      } catch (error) {
+        // 对方重启后内存中的请求会丢失，继续轮询没有意义；其余错误留到有效期结束。
+        if (error instanceof LanHttpError && error.status === 401)
+          this.settleOutgoing(entry, 'pending')
+      }
+    })().finally(() => {
+      entry.checking = undefined
+    })
+    return entry.checking
+  }
+  private prunePairs(): void {
+    const now = this.now()
+    let changed = false
+    for (const [id, request] of this.pairRequests) {
+      if (request.expires <= now) {
+        this.pairRequests.delete(id)
+        changed = true
+      }
+    }
+    for (const [id, resolved] of this.resolvedPairs)
+      if (resolved.expires <= now) this.resolvedPairs.delete(id)
+    for (const entry of [...this.outgoingPairs.values()])
+      if (entry.expires <= now) {
+        this.settleOutgoing(entry, 'pending')
+        changed = true
+      }
+    if (changed) this.options.changed()
   }
   unpair(id: string): void {
     z.string().uuid().parse(id)
     this.peers.delete(id)
     this.candidates.delete(id)
-    this.discovered.delete(id)
+    // 保留发现信息，解除配对后设备立即回到附近列表；地址仍会随发现刷新。
     this.store.db.prepare('DELETE FROM lan_peers WHERE id=?').run(id)
     this.options.changed()
   }
@@ -543,7 +800,7 @@ export class Lan {
     const url = new URL(`https://${address}${route}`)
     const agent = new Agent({ keepAlive: false })
     let transport: TLSSocket | undefined
-    // 在交出 socket 给 HTTP 层之前验证指纹；不能先发送邀请令牌再检查证书。
+    // 在交出 socket 给 HTTP 层之前验证指纹；不能先发送请求体再检查证书。
     agent.createConnection = (_options: RequestOptions, callback) => {
       const socket = connect({
         host: url.hostname.replace(/^\[|\]$/g, ''),
@@ -604,7 +861,10 @@ export class Lan {
               try {
                 const data = bytes ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : undefined
                 if (res.statusCode !== 200 && res.statusCode !== 304)
-                  throw new Error(data?.error || `远端返回 ${res.statusCode}`)
+                  throw new LanHttpError(
+                    res.statusCode ?? 500,
+                    data?.error || `远端返回 ${res.statusCode}`
+                  )
                 resolve({ status: res.statusCode, body: data, etag: res.headers.etag })
               } catch (error) {
                 reject(error)
@@ -685,9 +945,12 @@ export class Lan {
         this.lastDiscovery = this.now()
         this.browser?.update()
       }
+      this.prunePairs()
       const peers = [...this.peers.values()]
       for (let i = 0; this.enabled && this.server && i < peers.length; i += 4)
         await Promise.all(peers.slice(i, i + 4).map((peer) => this.refreshPeer(peer)))
+      // 已发起的配对请求由主进程统一轮询，界面关闭后也能完成配对。
+      await Promise.all([...this.outgoingPairs.values()].map((entry) => this.checkOutgoing(entry)))
     })().finally(() => {
       this.polling = undefined
     })
@@ -714,7 +977,11 @@ export class Lan {
   }
   private async stop(): Promise<void> {
     clearInterval(this.timer)
-    this.invitation = undefined
+    // 关闭共享时所有待确认请求和等待中的发起请求都应立即失效。
+    for (const entry of [...this.outgoingPairs.values()]) this.settleOutgoing(entry, 'pending')
+    this.outgoingPairs.clear()
+    this.pairRequests.clear()
+    this.resolvedPairs.clear()
     this.browser?.stop()
     this.browser = undefined
     this.publication?.stop()
@@ -747,8 +1014,18 @@ export class Lan {
 function fingerprint(raw: Buffer): string {
   return createHash('sha256').update(raw).digest('hex')
 }
-function equal(a: string, b: string): boolean {
-  const first = Buffer.from(a)
-  const second = Buffer.from(b)
-  return first.length === second.length && timingSafeEqual(first, second)
+/** 保留 HTTP 状态码，让配对轮询能区分“请求已失效”和短暂网络故障。 */
+class LanHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message)
+  }
+}
+/** 把 TLS 连接来源规范化为局域网 IPv4；IPv6、带 zone 或公网地址时返回 null。 */
+function connectionHost(address?: string): string | null {
+  if (!address) return null
+  const normalized = address.replace(/^::ffff:/, '').replace(/^\[|\]$/g, '')
+  return isIP(normalized) === 4 && isLocalAddress(normalized) ? normalized : null
 }

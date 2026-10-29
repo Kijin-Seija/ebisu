@@ -41,6 +41,8 @@ let root: string
 let oldHome: string | undefined
 let at: number
 const instances: { store: Store; skills: Skills; lan: Lan; directory: string }[] = []
+/** 每个实例启动后创建的发现浏览器；测试用它向指定设备注入附近设备信息。 */
+const browsers = new Map<Lan, import('node:events').EventEmitter>()
 const pkg = (name = 'remote-tool'): SkillPackage => ({
   version: 1,
   name,
@@ -72,7 +74,7 @@ const pkg = (name = 'remote-tool'): SkillPackage => ({
     }
   ]
 })
-async function make(discovery = false) {
+async function make(discovery = true) {
   const directory = path.join(root, `device-${instances.length}`)
   const home = path.join(directory, 'home')
   mkdirSync(home, { recursive: true })
@@ -102,10 +104,56 @@ async function make(discovery = false) {
   await lan.initialize()
   return instances[instances.length - 1]
 }
-async function pair(a: Awaited<ReturnType<typeof make>>, b: Awaited<ReturnType<typeof make>>) {
-  await a.lan.configure(true, 'Computer A')
-  await b.lan.configure(true, 'Computer B')
-  await b.lan.pair(a.lan.invitationString(`127.0.0.1:${a.lan.view().port}`))
+type Device = Awaited<ReturnType<typeof make>>
+/** 开启共享并把当前实例新创建的发现浏览器记录下来。 */
+async function start(device: Device, name: string) {
+  const before = device.lan.view().port
+  await device.lan.configure(true, name)
+  const after = device.lan.view().port
+  const latest = discoveryEvents.browsers[discoveryEvents.browsers.length - 1]
+  if (latest && (after !== before || !browsers.has(device.lan))) browsers.set(device.lan, latest)
+  return device
+}
+/** 用真实身份文件和证书指纹模拟一条 mDNS 发现记录。 */
+function announce(
+  target: Device,
+  source: Device,
+  overrides: { fingerprint?: string; protocol?: number; address?: string } = {}
+) {
+  const identity = JSON.parse(
+    readFileSync(path.join(source.directory, 'lan-identity.json'), 'utf8')
+  ) as { id: string; name: string; protocol: number; fingerprint: string }
+  const browser = browsers.get(target.lan)
+  if (!browser) throw new Error('目标设备没有发现浏览器')
+  const address = overrides.address ?? '127.0.0.1'
+  browser.emit('srv-update', {
+    txt: {
+      id: identity.id,
+      name: identity.name,
+      protocol: String(overrides.protocol ?? identity.protocol),
+      fingerprint: overrides.fingerprint ?? identity.fingerprint
+    },
+    addresses: [address],
+    port: source.lan.view().port!
+  })
+}
+async function until(predicate: () => boolean, timeout = 5000) {
+  const started = Date.now()
+  while (!predicate()) {
+    if (Date.now() - started > timeout) throw new Error('等待条件超时')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+/** 走完整配对流程：发起请求 -> 对方确认 -> 双方保存配对。 */
+async function pair(a: Device, b: Device) {
+  await start(a, 'Computer A')
+  await start(b, 'Computer B')
+  announce(b, a)
+  const pending = b.lan.requestPair(a.lan.device().id)
+  await until(() => a.lan.view().requests.length > 0)
+  await a.lan.respondPair(a.lan.view().requests[0].id, true)
+  await b.lan.poll()
+  expect(await pending).toBe('paired')
   await a.lan.poll()
 }
 beforeEach(() => {
@@ -185,23 +233,66 @@ it('默认关闭、证书持久化且权限为 0600，配对后只读拉取本�
   })
   expect(unchanged).toMatchObject({ status: 304, body: '' })
 })
-it('设备证书 pin 校验在发送邀请前完成；过期、重复邀请及未配对证书不能访问', async () => {
+it('附近设备请求配对后由对方确认，双方建立配对并从附近列表移除；拒绝不建立配对', async () => {
+  const a = await make()
+  const b = await make()
+  await start(a, 'A')
+  await start(b, 'B')
+  announce(a, b)
+  announce(b, a)
+  expect(a.lan.view().discovered.map((device) => device.id)).toEqual([b.lan.device().id])
+  const pending = b.lan.requestPair(a.lan.device().id)
+  await until(() => a.lan.view().requests.length === 1)
+  // 目标设备只看到待确认请求，尚未建立任何访问权限。
+  expect(a.lan.view().requests[0]).toMatchObject({ device: { name: 'B' } })
+  expect(a.lan.view().peers).toHaveLength(0)
+  await a.lan.respondPair(a.lan.view().requests[0].id, true)
+  await b.lan.poll()
+  expect(await pending).toBe('paired')
+  expect(a.lan.view().requests).toHaveLength(0)
+  expect(a.lan.view().peers.map((peer) => peer.id)).toEqual([b.lan.device().id])
+  expect(b.lan.view().peers.map((peer) => peer.id)).toEqual([a.lan.device().id])
+  expect(a.lan.view().discovered).toHaveLength(0)
+  expect(b.lan.view().discovered).toHaveLength(0)
+  a.lan.unpair(b.lan.device().id)
+  b.lan.unpair(a.lan.device().id)
+  announce(b, a)
+  const declined = b.lan.requestPair(a.lan.device().id)
+  await until(() => a.lan.view().requests.length === 1)
+  await a.lan.respondPair(a.lan.view().requests[0].id, false)
+  await b.lan.poll()
+  expect(await declined).toBe('declined')
+  expect(a.lan.view().peers).toHaveLength(0)
+  expect(b.lan.view().peers).toHaveLength(0)
+})
+it('配对必须由对方确认；错误证书指纹、过期请求、重复确认及未配对证书均被拒绝', async () => {
   const a = await make()
   const b = await make()
   const c = await make()
-  await a.lan.configure(true, 'A')
-  await b.lan.configure(true, 'B')
-  const invite = a.lan.invitationString(`127.0.0.1:${a.lan.view().port}`)
-  const decoded = JSON.parse(Buffer.from(invite.slice(11), 'base64url').toString())
-  const forged = `ebisu-pair:${Buffer.from(JSON.stringify({ ...decoded, fingerprint: 'a'.repeat(64) })).toString('base64url')}`
-  await expect(b.lan.pair(forged)).rejects.toThrow('证书不匹配')
+  await start(a, 'A')
+  await start(b, 'B')
+  // 发现信息中的指纹与真实证书不匹配时，连接在发送请求体前就被拒绝。
+  announce(b, a, { fingerprint: 'a'.repeat(64) })
+  await expect(b.lan.requestPair(a.lan.device().id)).rejects.toThrow('证书不匹配')
+  expect(a.lan.view().requests).toHaveLength(0)
   expect(a.lan.view().peers).toHaveLength(0)
   expect((await raw(c, a.lan.view().port!, '/lan/v1/snapshot')).status).toBe(401)
+  announce(b, a)
+  const expired = b.lan.requestPair(a.lan.device().id)
+  await until(() => a.lan.view().requests.length === 1)
+  const stale = a.lan.view().requests[0]
   at += 300001
-  await expect(b.lan.pair(invite)).rejects.toThrow('过期')
-  const fresh = a.lan.invitationString(`127.0.0.1:${a.lan.view().port}`)
-  await b.lan.pair(fresh)
-  await expect(b.lan.pair(fresh)).rejects.toThrow('邀请无效')
+  await expect(a.lan.respondPair(stale.id, true)).rejects.toThrow('过期')
+  await b.lan.poll()
+  expect(await expired).toBe('pending')
+  const pending = b.lan.requestPair(a.lan.device().id)
+  await until(() => a.lan.view().requests.length === 1)
+  const fresh = a.lan.view().requests[0]
+  expect(fresh.id).not.toBe(stale.id)
+  await a.lan.respondPair(fresh.id, true)
+  await expect(a.lan.respondPair(fresh.id, true)).rejects.toThrow('不存在')
+  await b.lan.poll()
+  expect(await pending).toBe('paired')
   expect(
     (await raw(b, a.lan.view().port!, '/lan/v1/snapshot', { Origin: 'https://web.example' })).status
   ).toBe(401)
@@ -210,7 +301,7 @@ it('设备证书 pin 校验在发送邀请前完成；过期、重复邀请及�
   expect((await raw(b, a.lan.view().port!, '/lan/v1/snapshot')).status).toBe(401)
   expect(a.lan.view().peers).toHaveLength(0)
 })
-it('离线缓存保留、重新启用恢复；重启保留设备与配对身份，手动地址可恢复连接', async () => {
+it('离线缓存保留、重新启用恢复；重启保留设备与配对身份，重新发现后自动恢复连接', async () => {
   const a = await make()
   const b = await make()
   a.store.addFolder(a.directory)
@@ -223,7 +314,7 @@ it('离线缓存保留、重新启用恢复；重启保留设备与配对身份�
   await a.lan.close()
   const restarted = new Lan(a.store, a.skills, {
     directory: a.directory,
-    discovery: false,
+    discovery: true,
     now: () => at,
     changed() {},
     snapshot: async () => ({ folders: [], skills: [] })
@@ -232,11 +323,10 @@ it('离线缓存保留、重新启用恢复；重启保留设备与配对身份�
   await restarted.initialize()
   expect(restarted.device().id).toBe(originalId)
   expect(restarted.view().peers[0].id).toBe(b.lan.device().id)
-  await restarted.configure(true, 'Computer A')
-  await b.lan.pair(
-    restarted.invitationString(`127.0.0.1:${restarted.view().port}`),
-    `127.0.0.1:${restarted.view().port}`
-  )
+  await start(a, 'Computer A')
+  // 端口变化由发现信息更新，不再需要手动填写对端地址。
+  announce(b, a)
+  await b.lan.poll()
   expect(b.lan.view().peers[0]).toMatchObject({ online: true, snapshot: { folders: [] } })
 })
 it('导出只有源文件和当前变量定义，不传播经验、配置和终端记录，文件篡改阻止导出', async () => {
@@ -367,19 +457,15 @@ it('按设备隔离相同项目和会话 ID，远端会话标记禁止本机跳�
   expect(isLocalAddress('8.8.8.8')).toBe(false)
   expect(isLocalAddress('172.16.1.1')).toBe(true)
 })
-it('错误协议和非局域网邀请被拒绝，默认值与不匹配哈希不可进入导入草稿', async () => {
+it('协议不兼容或非局域网的发现记录不能发起配对，默认值与不匹配哈希不可进入导入草稿', async () => {
   const a = await make()
   const b = await make()
-  await a.lan.configure(true, 'A')
-  await b.lan.configure(true, 'B')
-  const invitation = a.lan.invitationString(`127.0.0.1:${a.lan.view().port}`)
-  const input = JSON.parse(Buffer.from(invitation.slice(11), 'base64url').toString())
-  const encode = (data: unknown) =>
-    `ebisu-pair:${Buffer.from(JSON.stringify(data)).toString('base64url')}`
-  await expect(
-    b.lan.pair(encode({ ...input, device: { ...input.device, protocol: 2 } }))
-  ).rejects.toThrow('协议版本')
-  await expect(b.lan.pair(invitation, '8.8.8.8:443')).rejects.toThrow()
+  await start(a, 'A')
+  await start(b, 'B')
+  announce(b, a, { address: '8.8.8.8' })
+  await expect(b.lan.requestPair(a.lan.device().id)).rejects.toThrow('附近没有这台设备')
+  announce(b, a, { protocol: 2 })
+  await expect(b.lan.requestPair(a.lan.device().id)).rejects.toThrow('协议版本不兼容')
   const exportWithDefault = { skillId: a.lan.device().id, package: pkg(), hash: packageHash(pkg()) }
   expect(() => b.lan.transfer.prepare(a.lan.device(), exportWithDefault)).toThrow('默认取值')
   exportWithDefault.package.variables = []
@@ -421,8 +507,7 @@ it('多设备互联只发布本机数据，不转发第三台的项目和配对�
   const c = await make()
   a.store.addFolder(a.directory)
   await pair(a, b)
-  await c.lan.configure(true, 'C')
-  await c.lan.pair(b.lan.invitationString(`127.0.0.1:${b.lan.view().port}`))
+  await pair(b, c)
   expect(c.lan.view().peers).toHaveLength(1)
   expect(c.lan.view().peers[0].snapshot?.folders).toHaveLength(0)
   expect(c.lan.view().peers.some((peer) => peer.id === a.lan.device().id)).toBe(false)
@@ -465,21 +550,21 @@ it('本机同名源文件损坏时仍可准备并改名导入，不覆盖原文�
 })
 
 it('发现新的端口须先通过已配对证书认证，伪造发现不能替换可信地址', async () => {
-  const a = await make(true)
-  const b = await make(true)
+  const a = await make()
+  const b = await make()
   const c = await make()
   await pair(a, b)
-  await c.lan.configure(true, 'untrusted')
-  const browser = discoveryEvents.browsers[1]
+  await start(c, 'untrusted')
+  const browser = browsers.get(b.lan)!
   const originalAddress = b.lan.view().peers[0].address
-  const announce = (port: number) =>
+  const announcePort = (port: number) =>
     browser.emit('srv-update', { txt: a.lan.device(), addresses: ['127.0.0.1'], port })
-  announce(c.lan.view().port!)
+  announcePort(c.lan.view().port!)
   await b.lan.poll()
   expect(b.lan.view().peers[0]).toMatchObject({ address: originalAddress, online: true })
   await a.lan.resume()
   const nextAddress = `127.0.0.1:${a.lan.view().port}`
-  announce(a.lan.view().port!)
+  announcePort(a.lan.view().port!)
   await b.lan.poll()
   expect(b.lan.view().peers[0]).toMatchObject({ address: nextAddress, online: true })
 })

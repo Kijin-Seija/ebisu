@@ -4,8 +4,8 @@ import type { EbisuApi } from '../shared/types'
 /** 明确列出的命令防止 renderer 借桥接发送任意 Electron IPC。 */
 const api: EbisuApi = {
   configureLan: (enabled, name) => ipcRenderer.invoke('ebisu:configure-lan', enabled, name),
-  createInvitation: (address) => ipcRenderer.invoke('ebisu:create-invitation', address),
-  pairDevice: (invitation, address) => ipcRenderer.invoke('ebisu:pair-device', invitation, address),
+  requestPair: (device) => ipcRenderer.invoke('ebisu:request-pair', device),
+  respondPair: (request, accept) => ipcRenderer.invoke('ebisu:respond-pair', request, accept),
   unpairDevice: (id) => ipcRenderer.invoke('ebisu:unpair-device', id),
   remoteSkill: (device, skill) => ipcRenderer.invoke('ebisu:remote-skill', device, skill),
   prepareImport: (device, skill) => ipcRenderer.invoke('ebisu:prepare-import', device, skill),

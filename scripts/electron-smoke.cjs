@@ -745,7 +745,17 @@ async function main() {
       '14px'
     )
     await window.locator('.preference-heading').click()
-    assert.equal(await window.locator('.integration-row').count(), 6)
+    assert.equal(await window.locator('.integration-row').count(), 7)
+    // Qoder 与 Qoder CN 共用一张商标，因此 7 个终端只渲染 6 个分组图标。
+    assert.equal(await window.locator('.integration-group').count(), 6)
+    assert.equal(
+      await window
+        .locator('.integration-group')
+        .filter({ has: window.locator('[data-terminal="qodercn"]') })
+        .locator('.terminal-icon')
+        .count(),
+      1
+    )
     const detection = await window.evaluate(async () =>
       (await window.ebisu.snapshot()).integrations.map(({ id, detected, evidence }) => ({
         id,
@@ -761,7 +771,7 @@ async function main() {
         `${id} should be detected`
       )
     // 用户可在开发期间安装终端；实机结果跟随实际状态，未安装分支另有隔离测试。
-    for (const id of ['qoder', 'dsh'])
+    for (const id of ['qoder', 'qodercn', 'dsh'])
       assert.equal(
         await window
           .locator(`[data-terminal="${id}"]`)

@@ -86,18 +86,40 @@ module.exports = async function lanSmoke() {
     const b = await launch('target')
     await a.page.evaluate(() => window.ebisu.configureLan(true, 'LAN source'))
     await b.page.getByRole('button', { name: '设置', exact: true }).click()
-    await b.page.getByLabel('设备名称', { exact: true }).fill('LAN target')
+    await b.page.getByLabel('本机名称', { exact: true }).fill('LAN target')
     await b.page.getByRole('switch', { name: '局域网共享' }).click()
     await b.page.waitForFunction(async () => (await window.ebisu.snapshot()).lan?.enabled)
-    const invitation = await a.page.evaluate(async () => {
-      const state = await window.ebisu.snapshot()
-      return window.ebisu.createInvitation(`127.0.0.1:${state.lan.port}`)
-    })
-    await b.page.getByLabel('接收配对邀请').fill(invitation)
-    await b.page.getByRole('button', { name: '配对设备', exact: true }).click()
-    await b.page.waitForFunction(async () =>
-      (await window.ebisu.snapshot()).lan?.peers.some((peer) => peer.online)
+    // 配对只依赖 mDNS 发现：附近设备出现后直接请求，不填写地址或邀请串。
+    await b.page.waitForFunction(
+      async () => (await window.ebisu.snapshot()).lan?.discovered.length > 0,
+      undefined,
+      { timeout: 30000 }
     )
+    const sourceCard = b.page.locator('.lan-device-card').filter({ hasText: 'LAN source' })
+    await sourceCard.getByRole('button', { name: '请求配对', exact: true }).click()
+    // 确认弹窗出现在另一台设备，接受后双方自动建立配对。
+    await a.page
+      .locator('.n-dialog')
+      .getByText('是否接受来自「LAN target」的邀请？', { exact: true })
+      .waitFor({ timeout: 30000 })
+    await a.page.screenshot({ path: path.join(screenshots, 'lan-pair-request.png') })
+    await a.page.locator('.n-dialog').getByRole('button', { name: '接受', exact: true }).click()
+    await b.page.waitForFunction(
+      async () => (await window.ebisu.snapshot()).lan?.peers.some((peer) => peer.online),
+      undefined,
+      { timeout: 30000 }
+    )
+    // 已配对设备使用两列卡片，并立即从附近设备里移除。
+    await b.page.locator('.lan-device-card.is-paired').filter({ hasText: 'LAN source' }).waitFor()
+    // 真实局域网里可能还有其他 Ebisu 设备，只检查本次配对的来源设备。
+    assert.equal(
+      await b.page
+        .locator('.lan-device-card:not(.is-paired)')
+        .filter({ hasText: 'LAN source' })
+        .count(),
+      0
+    )
+    await b.page.screenshot({ path: path.join(screenshots, 'lan-settings.png') })
     await a.post('activity', {
       path: a.project,
       terminal: 'codex',

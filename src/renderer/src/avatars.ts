@@ -1,4 +1,4 @@
-import type { ModelFamily, SessionActivity } from '../../shared/types'
+import { terminalIconId, type ModelFamily, type SessionActivity } from '../../shared/types'
 
 /** 只识别明确的模型标识，绝不由终端品牌或静态默认配置猜测当前模型。 */
 export function modelFamily(model: string | null): ModelFamily | undefined {
@@ -11,9 +11,9 @@ export function modelFamily(model: string | null): ModelFamily | undefined {
   return undefined
 }
 
-/** 会话头像固定使用终端商标；模型角色只用于卡片背景。 */
+/** 会话头像固定使用终端商标；Qoder CN 复用 Qoder 商标，模型角色只用于卡片背景。 */
 export function avatarUrl(session: SessionActivity, revision: number): string {
-  return `ebisu-asset://avatar/terminal/${session.terminal}?v=${revision}`
+  return `ebisu-asset://avatar/terminal/${terminalIconId(session.terminal)}?v=${revision}`
 }
 
 /** 只有识别到模型角色时才提供透明轮廓背景；未知模型不渲染装饰层。 */

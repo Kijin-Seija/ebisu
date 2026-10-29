@@ -14,7 +14,7 @@
 | 字段            | 类型                        | 语义                                                                           |
 | --------------- | --------------------------- | ------------------------------------------------------------------------------ |
 | path            | string，必填                | 现存文件夹绝对路径；显示名称不参与匹配                                         |
-| terminal        | string，必填                | codex / workbuddy / claude / grok / qoder / dsh                                |
+| terminal        | string，必填                | codex / workbuddy / claude / grok / qoder / qodercn / dsh                      |
 | sessionId       | string，必填                | 同一宿主终端中的稳定会话标识，最长 512 字符                                    |
 | action          | enter / exit，必填          | 进入或刷新 / 退出                                                              |
 | phase           | executing / waiting / error | enter 时生效，默认 executing；error 表示网络、额度等无法继续的故障             |
@@ -67,27 +67,27 @@ HTTP 400 为 JSON 或参数错误，401 为认证或 Origin 被拒绝，404 为�
 
 ## 技能协议 v1
 
-技能接口复用相同服务发现、bearer 认证与 Origin 拒绝规则。所有请求为 `POST /v1/skills/<action>`，JSON 顶层必须有已绑定的 `terminal`（六种终端 ID 之一）。模型名称不参与数据隔离。活动接口仍限 32 KiB，技能接口限 12 MiB；技能包内容另限 8 MiB。
+技能接口复用相同服务发现、bearer 认证与 Origin 拒绝规则。所有请求为 `POST /v1/skills/<action>`，JSON 顶层必须有已绑定的 `terminal`（七种终端 ID 之一）。模型名称不参与数据隔离。活动接口仍限 32 KiB，技能接口限 12 MiB；技能包内容另限 8 MiB。
 
-| action              | 除 terminal 之外的请求字段                     | 成功结果                                                                  |
-| ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------- |
-| targets             | 无                                             | 已绑定终端及已有项目的 ID、名称和路径                                     |
-| list                | 无                                             | SkillSummary[]                                                            |
-| create              | package, requestId                             | SkillDetail                                                               |
-| detail              | skillId（UUID 或名称）                         | SkillDetail                                                               |
-| install / uninstall | skillId                                        | `{ok:true}`                                                               |
-| context             | skillId, path                                  | 初始说明、适用经验、非敏感变量、遮罩配置、中央目录和脚本列表              |
-| run-context         | skillId, path                                  | 客户端执行器专用；包含敏感变量，不打印                                    |
-| file                | skillId, file（包内文本路径）                  | `{content:string}`，宿主占位符已渲染                                      |
-| experiences         | ids（1–100 个 UUID）                           | SkillExperience[]，缺失 ID 返回 404                                       |
+| action              | 除 terminal 之外的请求字段                     | 成功结果                                                                            |
+| ------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------- |
+| targets             | 无                                             | 已绑定终端及已有项目的 ID、名称和路径                                               |
+| list                | 无                                             | SkillSummary[]                                                                      |
+| create              | package, requestId                             | SkillDetail                                                                         |
+| detail              | skillId（UUID 或名称）                         | SkillDetail                                                                         |
+| install / uninstall | skillId                                        | `{ok:true}`                                                                         |
+| context             | skillId, path                                  | 初始说明、适用经验、非敏感变量、遮罩配置、中央目录和脚本列表                        |
+| run-context         | skillId, path                                  | 客户端执行器专用；包含敏感变量，不打印                                              |
+| file                | skillId, file（包内文本路径）                  | `{content:string}`，宿主占位符已渲染                                                |
+| experiences         | ids（1–100 个 UUID）                           | SkillExperience[]，缺失 ID 返回 404                                                 |
 | experience-add      | skillId, content, evidence, folderId?, path?   | 新经验，含 UUID、revision、时间；提供 path 时由路径解析当前项目，未匹配项目返回 404 |
-| experience-update   | id, revision, content, evidence                | 同 ID 的更新经验                                                          |
-| experience-delete   | id, revision                                   | `{ok:true}`                                                               |
-| variables           | skillId, folderId?                             | 按全局、已安装终端、当前项目分层的 VariableView[]，敏感值只返回是否已设置 |
-| variable-reveal     | skillId, name, target                          | `{value:string \| null}`，显式读取指定层已保存值                          |
-| variable-add        | skillId, variable                              | `{ok:true}`                                                               |
-| variable-delete     | skillId, name                                  | `{ok:true}`，同时删除各层值                                               |
-| variable-set        | skillId, name, target, value（string 或 null） | `{ok:true}`；null 只清除 target 对应层                                    |
+| experience-update   | id, revision, content, evidence                | 同 ID 的更新经验                                                                    |
+| experience-delete   | id, revision                                   | `{ok:true}`                                                                         |
+| variables           | skillId, folderId?                             | 按全局、已安装终端、当前项目分层的 VariableView[]，敏感值只返回是否已设置           |
+| variable-reveal     | skillId, name, target                          | `{value:string \| null}`，显式读取指定层已保存值                                    |
+| variable-add        | skillId, variable                              | `{ok:true}`                                                                         |
+| variable-delete     | skillId, name                                  | `{ok:true}`，同时删除各层值                                                         |
+| variable-set        | skillId, name, target, value（string 或 null） | `{ok:true}`；null 只清除 target 对应层                                              |
 
 `target` 为 `{scope:"skill"}`（全局层）、`{scope:"terminal",terminal:"codex"}` 或 `{scope:"project",folderId:"UUID"}`。终端层和项目层互相独立；顶层 terminal 是调用宿主，target.terminal 只在终端层使用，两者都要求已绑定。
 
@@ -97,21 +97,22 @@ HTTP 创建载荷中的 `package.files` 为 `{相对路径:{content,encoding?:"u
 
 接口不提供初始文件或脚本修改操作。Renderer 的 preload 不暴露创建、变量定义新增/删除、运行配置或脚本执行能力，只公开查看、安装/卸载、经验删除、变量值编辑及显式显示敏感值。
 
-## 局域网只读接口（协议 v1）
+## 局域网接口（协议 v1）
 
 此服务独立于上述 `127.0.0.1` 通知服务，仅用户开启共享后监听局域网随机端口。不复用 `runtime.json` 的 bearer token。
 
-配对邀请格式为 `ebisu-pair:<base64url JSON>`，包含设备身份、共享地址、SHA-256 证书指纹、随机一次性令牌和过期时间。令牌由邀请生成设备校验，有效期五分钟。邀请不是常驻配置，不写入日志或数据库。
+配对通过“附近设备”发起，不再使用邀请串或手动地址：mDNS TXT 记录携带设备身份和 SHA-256 证书指纹，发起方先固定指纹再发送请求；目标设备只在内存中保存待确认请求（五分钟有效），由本机用户点击“接受”后才保存对方身份与证书指纹。请求与结果不写入数据库，关闭共享或重启即失效。
 
-| 接口 | 行为 |
-| --- | --- |
-| `POST /lan/v1/pair` | 提交邀请令牌、调用方设备身份及回连地址；需呈现客户端证书，成功后双方保存配对身份 |
-| `GET /lan/v1/snapshot` | 返回来源设备身份、本机项目/Git/会话、技能目录；支持 ETag / `If-None-Match` 和 304 |
-| `GET /lan/v1/skills/:id` | 返回完整、经过完整性校验的可移植技能包及内容哈希 |
-| `GET /lan/v1/skills/:id/export` | 同上，用于按需导入 |
+| 接口                            | 行为                                                                                             |
+| ------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `POST /lan/v1/pair-request`     | 未配对入口：提交调用方设备身份、请求 ID 和回连地址；保存待确认请求并通知界面弹窗，不授予访问权限 |
+| `POST /lan/v1/pair-status`      | 发起方轮询请求结果（`pending` / `accepted` / `declined`）；需呈现与请求一致的客户端证书          |
+| `GET /lan/v1/snapshot`          | 返回来源设备身份、本机项目/Git/会话、技能目录；支持 ETag / `If-None-Match` 和 304                |
+| `GET /lan/v1/skills/:id`        | 返回完整、经过完整性校验的可移植技能包及内容哈希                                                 |
+| `GET /lan/v1/skills/:id/export` | 同上，用于按需导入                                                                               |
 
-除配对入口外，必须通过已配对证书的双向 TLS 认证。服务拒绝浏览器 Origin，不提供活动上报、变量读取、经验、安装、运行或其他写操作。发现信息和缓存数据不能建立信任，客户端必须先校验证书指纹再发送 HTTP 数据。
+除上述配对接口外，必须通过已配对证书的双向 TLS 认证。服务拒绝浏览器 Origin，不提供活动上报、变量读取、经验、安装、运行或其他写操作。发现信息中的地址不能建立信任，客户端必须先校验证书指纹再发送 HTTP 数据；目标设备记录的是 TLS 客户端证书指纹，不采用请求体自报的指纹。
 
 设备身份为 `{ id, name, protocol }`；快照为 `{ device, folders, skills }`，仅发布本机数据。技能导出为 `{ skillId, package, hash }`，`package.variables` 使用当前变量定义并去掉 `defaultValue`，不包含任何保存的变量取值。哈希采用对象键稳定排序后的 JSON SHA-256。请求总期限五秒，接收响应限制 12 MiB；技能包仍遵守原有 8 MiB、256 文件等校验。
 
-preload 新增设备配置、生成邀请、配对/解除配对、读取远端技能、准备导入与确认导入业务接口，不暴露通用网络能力。导入草稿十五分钟有效、最多保留十六份；确认允许改名及修改已有 UTF-8 文本，不允许增加路径或修改二进制文件。来源设备身份、原技能 ID、原包哈希单独记录在本机数据库；重试相同草稿和输入返回同一本机技能 ID。
+preload 新增设备配置、请求配对/确认或拒绝请求、解除配对、读取远端技能、准备导入与确认导入业务接口，不暴露通用网络能力。导入草稿十五分钟有效、最多保留十六份；确认允许改名及修改已有 UTF-8 文本，不允许增加路径或修改二进制文件。来源设备身份、原技能 ID、原包哈希单独记录在本机数据库；重试相同草稿和输入返回同一本机技能 ID。

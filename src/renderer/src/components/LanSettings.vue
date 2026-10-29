@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { NButton, NInput, NSelect, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
+import { computed, ref, watch } from 'vue'
+import { NButton, NInput, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { useDashboard } from '../store'
+import type { NearbyDevice, RemoteDevice } from '../../../shared/lan'
 const dashboard = useDashboard()
 const api = window.ebisu
 const message = useMessage()
 const dialog = useDialog()
 const name = ref('')
-const address = ref<string | null>(null)
-const invitation = ref('')
-const received = ref('')
-const override = ref('')
 const busy = ref(false)
+const requesting = ref('')
+/** 已配对设备不再出现在附近设备里，主进程已过滤，这里不再重复判断。 */
+const nearby = computed<NearbyDevice[]>(() =>
+  [...(dashboard.snapshot?.lan?.discovered ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+)
+const peers = computed<RemoteDevice[]>(() =>
+  [...(dashboard.snapshot?.lan?.peers ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+)
 watch(
   () => dashboard.snapshot?.lan?.device.name,
   (value) => {
@@ -39,13 +44,19 @@ function forget(id: string, label: string) {
     onPositiveClick: () => run(() => api.unpairDevice(id))
   })
 }
-async function invite() {
-  invitation.value = await api.createInvitation(address.value || undefined)
+/** 请求配对后等待对方确认；超时仍会由后台继续等待，并在成功后自动出现在已配对设备里。 */
+async function request(device: NearbyDevice) {
+  requesting.value = device.id
   try {
-    await navigator.clipboard.writeText(invitation.value)
-    message.success('邀请已复制，五分钟内在另一台设备粘贴')
-  } catch {
-    message.info('请选择下方邀请串手动复制')
+    const outcome = await api.requestPair(device.id)
+    if (outcome === 'paired') message.success(`已与「${device.name}」配对`)
+    else if (outcome === 'declined') message.warning(`「${device.name}」拒绝了配对请求`)
+    else message.info(`已向「${device.name}」发送请求，请在对方设备上确认`)
+  } catch (error) {
+    message.error(String(error), { duration: 6000 })
+  } finally {
+    requesting.value = ''
+    await dashboard.refresh()
   }
 }
 </script>
@@ -60,13 +71,14 @@ async function invite() {
         @update:value="(value: boolean) => run(() => api.configureLan(value, name))"
       />
     </div>
-    <p class="section-meta">配对后可互相查看项目状态和技能，技能需手动导入。</p>
-    <div class="lan-form-row">
+    <p class="section-meta lan-intro">配对后可互相查看项目状态和技能，技能需手动导入。</p>
+    <label class="lan-name-label" for="lan-device-name">本机名称</label>
+    <div class="lan-name-row">
       <n-input
         v-model:value="name"
         maxlength="100"
-        placeholder="设备名称"
-        :input-props="{ 'aria-label': '设备名称' }"
+        placeholder="本机名称"
+        :input-props="{ 'aria-label': '本机名称', id: 'lan-device-name' }"
       /><n-button
         :disabled="busy || !name.trim()"
         @click="run(() => api.configureLan(!!dashboard.snapshot?.lan?.enabled, name))"
@@ -77,79 +89,65 @@ async function invite() {
       {{ dashboard.snapshot.lan.error }}
     </p>
     <template v-if="dashboard.snapshot.lan.enabled">
-      <div class="lan-form-row">
-        <n-select
-          v-model:value="address"
-          :options="dashboard.snapshot.lan.addresses.map((item) => ({ label: item, value: item }))"
-          placeholder="本机共享地址（默认自动选择）"
-          aria-label="本机共享地址"
-        /><n-button :disabled="busy" @click="run(invite)">生成配对邀请</n-button>
-      </div>
-      <n-input
-        v-if="invitation"
-        :value="invitation"
-        type="textarea"
-        readonly
-        :input-props="{ 'aria-label': '配对邀请' }"
-        :rows="3"
-      />
-      <n-input
-        v-model:value="received"
-        type="textarea"
-        placeholder="粘贴另一台设备生成的配对邀请"
-        :input-props="{ 'aria-label': '接收配对邀请' }"
-        :rows="3"
-      />
-      <div class="lan-form-row">
-        <n-input
-          v-model:value="override"
-          placeholder="可选：手动指定对端 IP:端口"
-          :input-props="{ 'aria-label': '对端地址' }"
-        /><n-button
-          type="primary"
-          :disabled="busy || !received.trim()"
-          @click="
-            run(async () => {
-              await api.pairDevice(received.trim(), override.trim() || undefined)
-              received = ''
-              message.success('配对成功')
-            })
-          "
-          >配对设备</n-button
-        >
-      </div>
-      <div v-if="dashboard.snapshot.lan.discovered.length" class="lan-device-list">
+      <div class="lan-device-list">
         <h3>附近设备</h3>
-        <div
-          v-for="device in dashboard.snapshot.lan.discovered"
-          :key="device.id"
-          class="lan-device-row"
-        >
-          <span>{{ device.name }} · {{ device.address }}</span
-          ><span v-if="device.protocol !== 1">协议不兼容，请升级</span
-          ><n-button v-else size="small" @click="override = device.address">使用此地址</n-button>
+        <p v-if="!nearby.length" class="section-meta lan-empty">
+          正在寻找同一局域网内已开启共享的设备…
+        </p>
+        <div v-else class="lan-grid">
+          <div
+            v-for="device in nearby"
+            :key="device.id"
+            class="lan-device-card"
+            :data-device="device.id"
+          >
+            <span class="lan-device-name" :title="device.name">{{ device.name }}</span>
+            <n-button
+              size="small"
+              secondary
+              :loading="requesting === device.id"
+              :disabled="busy || !!requesting"
+              :title="device.fingerprint ? undefined : '对方版本不支持请求配对，请升级 Ebisu'"
+              @click="request(device)"
+              >请求配对</n-button
+            >
+          </div>
         </div>
-        <p class="section-meta">仍需在对方设备生成邀请，发现设备不会自动授予访问权限。</p>
       </div>
     </template>
+    <p v-else class="section-meta lan-empty">
+      开启后可发现同一局域网内的其他 Ebisu 设备；已配对设备仍可查看和解除配对。
+    </p>
+    <!-- 已配对设备保留缓存，关闭共享时仍可查看离线状态并解除配对。 -->
     <div class="lan-device-list">
       <h3>已配对设备</h3>
-      <p v-if="!dashboard.snapshot.lan.peers.length" class="section-meta">尚未配对设备</p>
-      <div v-for="peer in dashboard.snapshot.lan.peers" :key="peer.id" class="lan-peer">
-        <div class="lan-device-row">
-          <strong>{{ peer.name }}</strong
-          ><n-tag size="small" :type="peer.online ? 'success' : 'default'">{{
-            peer.online ? '在线' : '离线'
-          }}</n-tag
-          ><n-button size="small" :disabled="busy" @click="forget(peer.id, peer.name)"
+      <p v-if="!peers.length" class="section-meta lan-empty">尚未配对设备</p>
+      <div v-else class="lan-grid">
+        <div
+          v-for="peer in peers"
+          :key="peer.id"
+          class="lan-device-card is-paired"
+          :data-device="peer.id"
+        >
+          <div class="lan-device-head">
+            <span class="lan-device-name" :title="peer.name">{{ peer.name }}</span>
+            <n-tag size="small" :type="peer.online ? 'success' : 'default'">{{
+              peer.online ? '在线' : '离线'
+            }}</n-tag>
+          </div>
+          <p class="section-meta lan-card-meta">
+            {{ peer.address }}
+          </p>
+          <p class="section-meta lan-card-meta">
+            {{
+              peer.lastSeen ? `最后更新 ${new Date(peer.lastSeen).toLocaleString()}` : '尚未同步'
+            }}
+          </p>
+          <p v-if="peer.error" class="lan-error">{{ peer.error }}</p>
+          <n-button size="small" :disabled="busy" @click="forget(peer.id, peer.name)"
             >解除配对</n-button
           >
         </div>
-        <p class="section-meta">
-          {{ peer.address }} ·
-          {{ peer.lastSeen ? `最后更新 ${new Date(peer.lastSeen).toLocaleString()}` : '尚未同步' }}
-        </p>
-        <p v-if="peer.error" class="lan-error">{{ peer.error }}</p>
       </div>
     </div>
   </section>

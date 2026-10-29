@@ -17,7 +17,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import TOML from '@iarna/toml'
 import type { Store } from './database'
-import { terminalIds, type IntegrationView, type TerminalId } from '../shared/types'
+import { terminalIds, terminalIconId, type IntegrationView, type TerminalId } from '../shared/types'
 
 import { FileChanges, safeFile } from './skill-files'
 import { adapters, terminalNames } from './terminal-adapters'
@@ -473,6 +473,7 @@ ${end}`
       }
       return {
         id,
+        icon: terminalIconId(id),
         name: terminalNames[id],
         detected: evidence.length > 0,
         evidence,

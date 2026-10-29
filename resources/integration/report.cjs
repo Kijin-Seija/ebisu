@@ -38,7 +38,9 @@ function environmentSession(terminal) {
       return process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID
     case 'grok':
       return process.env.GROK_SESSION_ID
+    // Qoder CN 与 Qoder 由同一代码基底提供 QODER_SESSION_ID，用户目录不同但身份变量一致。
     case 'qoder':
+    case 'qodercn':
       return process.env.QODER_SESSION_ID
     case 'workbuddy':
       return process.env.WORKBUDDY_SESSION_ID || process.env.CODEBUDDY_SESSION_ID

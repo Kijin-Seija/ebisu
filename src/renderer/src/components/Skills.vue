@@ -49,7 +49,7 @@ import { useDashboard } from '../store'
 import DeviceFilter from './DeviceFilter.vue'
 import RemoteSkill from './RemoteSkill.vue'
 import type { SkillView } from '../device-views'
-import { terminalNames } from '../../../shared/types'
+import { terminalIconId, terminalNames } from '../../../shared/types'
 import type {
   SkillDetail,
   SkillExperience,
@@ -688,7 +688,7 @@ onBeforeUnmount(() => {
         >
           <template #trigger>
             <img
-              :src="`ebisu-asset://avatar/terminal/${installation.terminal}?v=${dashboard.revision}`"
+              :src="`ebisu-asset://avatar/terminal/${terminalIconId(installation.terminal)}?v=${dashboard.revision}`"
               :alt="names[installation.terminal]"
               class="skill-terminal-icon"
             />
@@ -776,7 +776,7 @@ onBeforeUnmount(() => {
                 :data-skill-terminal="host.id"
               >
                 <img
-                  :src="`ebisu-asset://avatar/terminal/${host.id}?v=${dashboard.revision}`"
+                  :src="`ebisu-asset://avatar/terminal/${terminalIconId(host.id)}?v=${dashboard.revision}`"
                   :alt="host.name"
                   class="skill-install-icon"
                 />

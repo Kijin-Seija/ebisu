@@ -60,6 +60,17 @@ function binary(name: string) {
   writeFileSync(target, '#!/bin/sh\nexit 0\n')
   chmodSync(target, 0o700)
 }
+function app(name: string) {
+  const target = path.join(apps, name)
+  mkdirSync(path.join(target, 'Contents'), { recursive: true })
+  writeFileSync(path.join(target, 'Contents/Info.plist'), '<plist/>')
+  return target
+}
+/** Qoder CN 只通过桌面应用包探测，其他原生 hook 终端用可执行文件夹具。 */
+function terminalEvidence(terminal: TerminalId) {
+  if (terminal === 'qodercn') app('Qoder CN.app')
+  else binary(terminal)
+}
 function text(name: string) {
   return readFileSync(path.join(home, name), 'utf8')
 }
@@ -117,6 +128,31 @@ it('Qoder 只有配置残留时不算已安装；可执行文件与应用均可�
   mkdirSync(path.join(apps, 'WorkBuddy.app/Contents'), { recursive: true })
   writeFileSync(path.join(apps, 'WorkBuddy.app/Contents/Info.plist'), '<plist/>')
   expect(integrations.detect('workbuddy')).toContain(path.join(apps, 'WorkBuddy.app'))
+})
+it('Qoder CN 只按应用包探测，配置、安装状态与 Qoder 相互独立', () => {
+  file('.qoder-cn/AGENTS.md', 'residual')
+  expect(integrations.detect('qodercn')).toEqual([])
+  expect(() => integrations.install('qodercn')).toThrow('尚未安装')
+  app('Qoder CN.app')
+  expect(integrations.detect('qodercn')).toContain(path.join(apps, 'Qoder CN.app'))
+  // 国内版应用包不能把海外版 Qoder 误判为已安装。
+  expect(integrations.detect('qoder')).toEqual([])
+  integrations.install('qodercn')
+  expect(text('.qoder-cn/skills/ebisu-qodercn/SKILL.md')).toContain('name: ebisu-qodercn')
+  expect(JSON.parse(text('.qoder-cn/settings.json')).hooks.PermissionRequest).toHaveLength(1)
+  expect(integrations.views().find((view) => view.id === 'qodercn')).toMatchObject({
+    icon: 'qoder',
+    installed: true,
+    detected: true,
+    health: 'restart'
+  })
+  expect(integrations.views().find((view) => view.id === 'qoder')).toMatchObject({
+    icon: 'qoder',
+    installed: false,
+    detected: false
+  })
+  integrations.uninstall('qodercn')
+  expect(text('.qoder-cn/AGENTS.md').trim()).toBe('residual')
 })
 it('DSH 只有配置残留时不算已安装；CLI 与应用均可作为安装证据', () => {
   file('.dsh/AGENTS.md', 'residual')
@@ -364,11 +400,11 @@ it('被用户修改的 skill 不会被卸载或重新安装覆盖', () => {
   expect(() => integrations.install('grok')).toThrow('已有同名')
   expect(text('.grok/skills/ebisu-grok/SKILL.md')).toBe('用户改写')
 })
-it('五种原生 hook 终端完成真实 wrapper→HTTP→SQLite 通知链路；检查不伪造健康', async () => {
+it('六种原生 hook 终端完成真实 wrapper→HTTP→SQLite 通知链路；检查不伪造健康', async () => {
   const folder = store.addFolder(root)
   server = await startServer(store, path.join(data, 'runtime.json'), () => {})
-  for (const terminal of ['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const) {
-    binary(terminal)
+  for (const terminal of ['codex', 'workbuddy', 'claude', 'grok', 'qoder', 'qodercn'] as const) {
+    terminalEvidence(terminal)
     integrations.install(terminal)
     expect(integrations.views().find((view) => view.id === terminal)?.health).toBe('restart')
     expect(await integrations.check(terminal)).toContain('本机通知链路正常')
@@ -404,7 +440,7 @@ it('五种原生 hook 终端完成真实 wrapper→HTTP→SQLite 通知链路；
     ).toBeUndefined()
   }
 })
-it.each(['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const)(
+it.each(['codex', 'workbuddy', 'claude', 'grok', 'qoder', 'qodercn'] as const)(
   '%s 正常结束不依据任务结果判故障，旧规则无接口证据的 error 不会阻止完成',
   async (terminal) => {
     const folder = store.addFolder(root)
@@ -475,7 +511,7 @@ it('Grok 兼容加载 Claude hook 时不会伪造 Claude 会话', async () => {
   expect(store.sessions(folder.id)).toMatchObject([{ terminal: 'grok', sessionId: 'grok-session' }])
 })
 
-it.each(['codex', 'workbuddy', 'claude', 'grok', 'qoder'] as const)(
+it.each(['codex', 'workbuddy', 'claude', 'grok', 'qoder', 'qodercn'] as const)(
   '%s 无身份环境变量时，原生工具事件绑定 skill 临时 ID；等待、跨目录退出及并发不产生幽灵会话',
   async (terminal) => {
     const first = store.addFolder(root)
@@ -597,7 +633,8 @@ it.each([
   ['workbuddy', 'CODEBUDDY_SESSION_ID'],
   ['claude', 'CLAUDE_SESSION_ID'],
   ['grok', 'GROK_SESSION_ID'],
-  ['qoder', 'QODER_SESSION_ID']
+  ['qoder', 'QODER_SESSION_ID'],
+  ['qodercn', 'QODER_SESSION_ID']
 ] as const)('%s 识别 %s 原生身份，环境明确时不被父 Codex 误归属', async (terminal, key) => {
   const folder = store.addFolder(root)
   integrations.prepareBridge()
@@ -625,7 +662,7 @@ it('没有会话身份时不按共享宿主进程猜测，避免串联桌面端�
   expect(store.sessions(folder.id)).toHaveLength(0)
 })
 
-it.each(['workbuddy', 'claude', 'grok', 'qoder'] as const)(
+it.each(['workbuddy', 'claude', 'grok', 'qoder', 'qodercn'] as const)(
   '%s 的原生 hook 不会因继承父 Codex 变量而被跳过或误报',
   async (terminal) => {
     const folder = store.addFolder(root)

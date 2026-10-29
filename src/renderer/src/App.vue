@@ -24,6 +24,7 @@ import {
 import { useDashboard } from './store'
 import Dashboard from './components/Dashboard.vue'
 import DeviceFilter from './components/DeviceFilter.vue'
+import LanPairDialog from './components/LanPairDialog.vue'
 import Settings from './components/Settings.vue'
 import Skills from './components/Skills.vue'
 import StoneMark from './components/StoneMark.vue'
@@ -119,6 +120,8 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
   >
     <n-message-provider
       ><n-dialog-provider>
+        <!-- 配对请求只在主窗口提示，托盘窗口不重复弹出；主进程会主动把主窗口带到前台。 -->
+        <LanPairDialog v-if="!trayMode" />
         <div class="app-shell" :class="{ dark, 'tray-mode': trayMode }">
           <aside v-if="!trayMode" class="sidebar">
             <div class="traffic-space"></div>

@@ -785,14 +785,31 @@ button:focus-visible {
   border-radius: 12px;
   overflow: hidden;
 }
-.integration-row {
+.integration-group {
   display: flex;
   align-items: center;
   gap: 13px;
-  padding: 19px 20px;
+  padding: 17px 20px;
+}
+.integration-group + .integration-group {
+  border-top: 1px solid var(--line);
+}
+.integration-group-rows {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.integration-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 .integration-row + .integration-row {
   border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
 }
 .terminal-icon {
   width: 36px;
@@ -1009,9 +1026,12 @@ button:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
-.tray-mode .integration-row {
+.tray-mode .integration-group {
   gap: 9px;
   padding: 15px 12px;
+}
+.tray-mode .integration-row {
+  gap: 8px;
 }
 .tray-mode .project-card {
   /* 背景高度略高于卡片一半并缩小 4px；水平线以下的桌面已抠除，只留下手与装饰溢出。 */
@@ -1079,7 +1099,7 @@ button:focus-visible {
   .heading-actions {
     gap: 6px;
   }
-  .integration-row {
+  .integration-group {
     padding: 17px 16px;
   }
 }
@@ -1499,26 +1519,75 @@ button:focus-visible {
   padding-bottom: 24px;
   border-bottom: 1px solid var(--line);
 }
-.lan-settings > .n-input {
-  margin: 8px 0;
+.lan-intro {
+  white-space: normal;
+  margin: 0;
 }
-.lan-form-row,
-.lan-device-row {
+.lan-name-label {
+  display: block;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--faint);
+}
+.lan-name-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 12px 0;
+  margin: 8px 0 12px;
 }
-.lan-form-row > .n-input,
-.lan-form-row > .n-select,
-.lan-device-row > span:first-child,
-.lan-device-row > strong {
+.lan-name-row > .n-input {
   flex: 1;
   min-width: 0;
 }
-.lan-peer {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
+/* 附近设备与已配对设备都使用两列卡片，窄窗口退化为单列。 */
+.lan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.lan-device-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.lan-device-card.is-paired {
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+}
+.lan-device-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.lan-device-name {
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lan-device-head .lan-device-name {
+  flex: 1;
+}
+.lan-device-card .n-button {
+  margin-top: 2px;
+}
+.lan-card-meta {
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.lan-empty {
+  white-space: normal;
+  margin: 8px 0 0;
 }
 .lan-error {
   color: #c26746;
@@ -1555,7 +1624,7 @@ button:focus-visible {
   .import-diff {
     grid-template-columns: 1fr;
   }
-  .lan-form-row {
-    flex-wrap: wrap;
+  .lan-grid {
+    grid-template-columns: 1fr;
   }
 }

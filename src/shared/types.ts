@@ -1,7 +1,15 @@
 import type { DeviceApi } from './lan'
 
 /** 终端标识固定为协议值，不能由用户显示名称推断。 */
-export const terminalIds = ['codex', 'workbuddy', 'claude', 'grok', 'qoder', 'dsh'] as const
+export const terminalIds = [
+  'codex',
+  'workbuddy',
+  'claude',
+  'grok',
+  'qoder',
+  'qodercn',
+  'dsh'
+] as const
 export type TerminalId = (typeof terminalIds)[number]
 /** 显示名称只用于界面；协议、配置目录和 skill 名称始终使用终端标识。 */
 export const terminalNames: Record<TerminalId, string> = {
@@ -10,7 +18,13 @@ export const terminalNames: Record<TerminalId, string> = {
   claude: 'Claude Code',
   grok: 'Grok',
   qoder: 'Qoder',
+  qodercn: 'Qoder CN',
   dsh: 'DeepSeek Harness'
+}
+/** 同一品牌的不同发行版共用商标素材与自定义头像，避免界面出现重复图标。 */
+const terminalIconIds: Partial<Record<TerminalId, TerminalId>> = { qodercn: 'qoder' }
+export function terminalIconId(id: TerminalId): TerminalId {
+  return terminalIconIds[id] ?? id
 }
 export type ModelFamily = 'gpt' | 'claude' | 'deepseek' | 'kimi' | 'qwen' | 'gemini' | 'grok'
 export const activityPhases = ['executing', 'waiting', 'error'] as const
@@ -65,6 +79,8 @@ export interface FolderView extends Folder {
 }
 export interface IntegrationView {
   id: TerminalId
+  /** 集成列表展示的商标素材；Qoder CN 与 Qoder 共用图标但分别记录安装状态。 */
+  icon: TerminalId
   name: string
   detected: boolean
   evidence: string[]

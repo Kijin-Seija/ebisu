@@ -26,7 +26,14 @@ import { Integrations } from './integrations'
 import { TaskTitles } from './task-titles'
 import { Skills, SkillError, targetSchema } from './skills'
 import { Lan } from './lan'
-import { terminalIds, type AvatarKey, type GitStatus, type Snapshot } from '../shared/types'
+import {
+  terminalIconId,
+  terminalIds,
+  type AvatarKey,
+  type GitStatus,
+  type Snapshot,
+  type TerminalId
+} from '../shared/types'
 
 // 自定义 scheme 仅提供白名单头像，不把完整文件系统暴露给 renderer。
 protocol.registerSchemesAsPrivileged([
@@ -61,7 +68,9 @@ const terminalSchema = z.enum(terminalIds)
 const avatarSchema = z
   .string()
   .regex(
-    /^((model|tray):(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(codex|workbuddy|claude|grok|qoder|dsh))$/
+    new RegExp(
+      `^((model|tray):(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(${terminalIds.join('|')}))$`
+    )
   )
 
 function changed(): void {
@@ -243,11 +252,9 @@ function installIpc(): void {
   handle('configure-lan', (enabled: unknown, name: unknown) =>
     lan.configure(z.boolean().parse(enabled), z.string().parse(name))
   )
-  handle('create-invitation', (address: unknown) =>
-    lan.invitationString(z.string().optional().parse(address))
-  )
-  handle('pair-device', (invitation: unknown, address: unknown) =>
-    lan.pair(z.string().parse(invitation), z.string().optional().parse(address))
+  handle('request-pair', (device: unknown) => lan.requestPair(z.string().uuid().parse(device)))
+  handle('respond-pair', (request: unknown, accept: unknown) =>
+    lan.respondPair(z.string().uuid().parse(request), z.boolean().parse(accept))
   )
   handle('unpair-device', (id: unknown) => lan.unpair(z.string().uuid().parse(id)))
   handle('remote-skill', (device: unknown, skill: unknown) =>
@@ -454,6 +461,11 @@ async function boot(): Promise<void> {
   lan = new Lan(store, skills, {
     directory: dataDirectory,
     changed,
+    // 收到配对请求时把主窗口带到前台，弹窗不会藏在后台或隐藏窗口里。
+    // 启动早期主窗口尚未创建，此时不主动建窗，避免与启动流程重复创建。
+    request: () => {
+      if (mainWindow) showMain()
+    },
     snapshot: async () => {
       const local = await snapshot()
       return { folders: local.folders, skills: local.skills }
@@ -476,17 +488,19 @@ async function boot(): Promise<void> {
       (parts[0] === 'model' &&
         url.searchParams.get('background') === '1' &&
         url.searchParams.get('tray') === '1')
-    const key = `${isTrayModel ? 'tray' : parts[0]}:${parts[1]}` as AvatarKey
+    // 终端商标按品牌别名解析，Qoder CN 与 Qoder 共用同一张素材和自定义头像。
+    const assetId = parts[0] === 'terminal' ? terminalIconId(parts[1] as TerminalId) : parts[1]
+    const key = `${isTrayModel ? 'tray' : parts[0]}:${assetId}` as AvatarKey
     const custom = store.settings().avatars[key]
     const assetGroup = isTrayModel ? 'model' : parts[0]
-    const base = path.join(resources, 'avatars', `${assetGroup}-${parts[1]}`)
+    const base = path.join(resources, 'avatars', `${assetGroup}-${assetId}`)
     // 装饰背景优先使用随包发布的透明轮廓，小头像保持原图；托盘使用 Q 版素材，主窗口沿用旧轮廓。
     const backgroundFolder = isTrayModel ? 'tray' : 'backgrounds'
     const silhouette = path.join(
       resources,
       'avatars',
       backgroundFolder,
-      `${assetGroup}-${parts[1]}.png`
+      `${assetGroup}-${assetId}.png`
     )
     const filename =
       custom && existsSync(custom)

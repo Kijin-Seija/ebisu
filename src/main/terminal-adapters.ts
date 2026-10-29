@@ -107,6 +107,28 @@ export const adapters: Record<TerminalId, Adapter> = {
       'ElicitationResult'
     ]
   },
+  // Qoder CN 使用独立的 ~/.qoder-cn 用户目录与 Qoder CN.app，hook 形状与 Qoder 相同。
+  // 桌面应用内置 CLI，不安装全局可执行文件，因此只按应用包探测。
+  qodercn: {
+    commands: [],
+    apps: ['Qoder CN.app'],
+    root: '.qoder-cn',
+    skillRoot: '.qoder-cn/skills',
+    rule: '.qoder-cn/AGENTS.md',
+    hookFile: '.qoder-cn/settings.json',
+    events: [
+      'UserPromptSubmit',
+      'PreToolUse',
+      'PostToolUse',
+      'PermissionRequest',
+      'Notification',
+      'Stop',
+      'StopFailure',
+      'SessionEnd',
+      'Elicitation',
+      'ElicitationResult'
+    ]
+  },
   // DSH 0.2.1-rc.3 读取 ~/.dsh/AGENTS.md 与 ~/.dsh/skills，但没有可安装的用户级
   // 生命周期 hook；因此只安装规则和 skill，由模型按规则主动上报，不伪造原生事件。
   dsh: {
