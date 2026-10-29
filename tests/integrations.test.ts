@@ -119,6 +119,128 @@ function bridge(
     child.stdin.end(JSON.stringify(input))
   })
 }
+/** 离线链路要断言退出码与输出本身，不能借用只接受 0 退出的 bridge 包装。 */
+function launcher(
+  client: string,
+  args: string[],
+  input: unknown = {}
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env }
+    for (const key of [
+      'CODEX_THREAD_ID',
+      'CODEX_SESSION_ID',
+      'GROK_SESSION_ID',
+      'GROK_HOOK_EVENT',
+      'WORKBUDDY_SESSION_ID',
+      'CODEBUDDY_SESSION_ID',
+      'QODER_PROJECT_DIR',
+      'QODER_SESSION_ID',
+      'CLAUDE_SESSION_ID',
+      'DSH_SESSION_ID'
+    ])
+      delete env[key]
+    const child = spawn(client, args, { env })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
+    })
+    child.on('error', reject)
+    child.on('close', (code) => resolve({ code, stdout, stderr }))
+    child.stdin.end(JSON.stringify(input))
+  })
+}
+it('Ebisu 未启动时上报离线降级：手动调用给出结论且 0 退出，原生 hook 保持静默', async () => {
+  integrations.prepareBridge()
+  server = await startServer(store, path.join(data, 'runtime.json'), () => {})
+  const online = await launcher(integrations.bridge, [
+    '--terminal',
+    'claude',
+    '--session',
+    'offline-case',
+    '--path',
+    root,
+    '--action',
+    'enter'
+  ])
+  expect(online.code).toBe(0)
+  expect(online.stdout.trim()).toBe('{"ok":true}')
+  // 关闭服务会删除 runtime.json，与 Ebisu 从未启动完全等价。
+  await server.close()
+  server = undefined
+  expect(existsSync(path.join(data, 'runtime.json'))).toBe(false)
+  const offline = await launcher(integrations.bridge, [
+    '--terminal',
+    'claude',
+    '--session',
+    'offline-case',
+    '--path',
+    root,
+    '--action',
+    'enter'
+  ])
+  expect(offline.code).toBe(0)
+  expect(offline.stderr).toBe('')
+  expect(offline.stdout.trim()).toBe('{"ok":false,"reason":"ebisu-not-running"}')
+  const hook = await launcher(integrations.bridge, ['--terminal', 'claude', '--hook'], {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: 'offline-case',
+    cwd: root
+  })
+  expect(hook.code).toBe(0)
+  expect(hook.stdout).toBe('')
+  expect(hook.stderr).toBe('')
+})
+it('应用可执行文件缺失时启动器仍按离线降级，不把 shell 报错交给终端', async () => {
+  // 模拟应用被移动且尚未重新启动：wrapper 指向的二进制不存在。
+  const moved = new Integrations(store, {
+    home,
+    dataDirectory: data,
+    resources: path.resolve('resources'),
+    executable: path.join(root, 'missing/Ebisu.app/Contents/MacOS/Ebisu'),
+    pathEnv: bin,
+    appDirectories: [apps]
+  })
+  moved.prepareBridge()
+  const manual = await launcher(moved.bridge, [
+    '--terminal',
+    'claude',
+    '--session',
+    'moved-case',
+    '--path',
+    root
+  ])
+  expect(manual.code).toBe(0)
+  expect(manual.stderr).toBe('')
+  expect(manual.stdout.trim()).toBe('{"ok":false,"reason":"ebisu-not-running"}')
+  const hook = await launcher(moved.bridge, ['--terminal', 'claude', '--hook'], {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: 'moved-case',
+    cwd: root
+  })
+  expect(hook.code).toBe(0)
+  expect(hook.stdout).toBe('')
+  expect(hook.stderr).toBe('')
+  // 申请身份不能依赖服务，否则规则会让 agent 卡在第一步。
+  const identity = await launcher(moved.bridge, ['--terminal', 'claude', '--new-session'])
+  expect(identity.code).toBe(0)
+  expect(identity.stdout.trim()).toMatch(/^local-/)
+  const health = await launcher(moved.bridge, ['--check', '--terminal', 'claude'])
+  expect(health.code).toBe(0)
+  expect(health.stdout).toBe('{"ok":false}')
+})
+it('受管规则声明上报失败不能中止任务', () => {
+  binary('claude')
+  integrations.install('claude')
+  const rule = text('.claude/rules/ebisu-activity.md')
+  expect(rule).toContain('不构成任务的前置条件')
+  expect(rule).toContain('绝不终止任务')
+  expect(rule).toContain('不自动启动 Ebisu')
+})
 it('Qoder 只有配置残留时不算已安装；可执行文件与应用均可作为安装证据', () => {
   file('.qoder/AGENTS.md', 'residual')
   expect(integrations.detect('qoder')).toEqual([])

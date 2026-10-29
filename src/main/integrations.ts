@@ -109,11 +109,7 @@ export class Integrations {
     mkdirSync(path.dirname(this.bridge), { recursive: true, mode: 0o700 })
     copyFileSync(path.join(this.options.resources, 'integration/report.cjs'), `${this.bridge}.cjs`)
     const runtime = path.join(this.options.dataDirectory, 'runtime.json')
-    writeFileSync(
-      this.bridge,
-      `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${quote(this.options.executable)} ${quote(`${this.bridge}.cjs`)} --runtime ${quote(runtime)} "$@"\n`,
-      { mode: 0o700 }
-    )
+    writeFileSync(this.bridge, this.launcher(this.bridge, runtime, true), { mode: 0o700 })
     chmodSync(this.bridge, 0o700)
     safeFile(this.options.dataDirectory, '.ebisu/tools/skills')
     mkdirSync(path.dirname(this.skillsClient), { recursive: true, mode: 0o700 })
@@ -121,11 +117,9 @@ export class Integrations {
       path.join(this.options.resources, 'integration/skills.cjs'),
       `${this.skillsClient}.cjs`
     )
-    writeFileSync(
-      this.skillsClient,
-      `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${quote(this.options.executable)} ${quote(`${this.skillsClient}.cjs`)} --runtime ${quote(runtime)} "$@"\n`,
-      { mode: 0o700 }
-    )
+    writeFileSync(this.skillsClient, this.launcher(this.skillsClient, runtime, false), {
+      mode: 0o700
+    })
     chmodSync(this.skillsClient, 0o700)
     for (const name of ['ebisu-skill-create', 'ebisu-skill-discuss']) {
       const destination = safeFile(this.options.dataDirectory, `.ebisu/management/${name}.md`)
@@ -134,11 +128,35 @@ export class Integrations {
     }
   }
 
+  /**
+   * 启动器用当前应用的 Electron 跑 Node 模式；应用被移动或重装的瞬间可执行文件可能不存在。
+   * 活动上报必须在这种情况下仍然 0 退出并给出离线结论，否则绑定终端会把上报失败当成任务中止；
+   * 技能客户端相反，它的协议要求服务不可用时报错退出，不能拿过期配置继续执行。
+   */
+  private launcher(client: string, runtime: string, activityBridge: boolean): string {
+    const executable = quote(this.options.executable)
+    const offline = activityBridge
+      ? `case " $* " in
+  *--hook*) exit 0 ;;
+  *--new-session*) printf 'local-sh-%s\\n' "$(date +%s)$$" ; exit 0 ;;
+  *--check*) printf '{"ok":false}' ; exit 0 ;;
+  esac
+  printf '{"ok":false,"reason":"ebisu-not-running"}\\n'
+  exit 0`
+      : 'echo "Ebisu skills: app executable is missing; start Ebisu and retry." >&2\n  exit 1'
+    return `#!/bin/sh
+if [ ! -x ${executable} ]; then
+  ${offline}
+fi
+ELECTRON_RUN_AS_NODE=1 exec ${executable} ${quote(`${client}.cjs`)} --runtime ${quote(runtime)} "$@"
+`
+  }
+
   private ruleText(id: TerminalId): string {
     const command = `${quote(this.bridge)} --terminal ${id}`
     return `${begin}
 ## Ebisu 项目活动通知（始终适用）
-当本会话涉及本机文件夹（包括阅读、规划、执行）时，先调用通知 skill ebisu-${id}。
+当本会话涉及本机文件夹（包括阅读、规划、执行）时，先调用通知 skill ebisu-${id}；上报只是旁路观测，任何情况下都不构成任务的前置条件。
 使用本机终端工具执行 ${command} --session 本会话ID --path /绝对目录 --action enter，已注册目录及其子目录会被监控，其他目录自动忽略。
 同一会话的每次上报必须复用真实会话 ID；可用时通过 --session 传入。上报工具会自动读取宿主的会话环境变量（Codex 为 CODEX_THREAD_ID 或 CODEX_SESSION_ID，DeepSeek Harness 为 DSH_SESSION_ID），不要因为不知道真实 ID 就另造临时身份。模型已知时用 --model 传入真实模型名，未知时省略。
 需要获取上报 ID 时执行 ${command} --new-session；该命令优先返回宿主真实 ID，仅在确实缺失时生成 local- ID。只申请一次，保存并在本会话所有通知中用 --session 复用返回值，不要在不同会话之间共享，也不要将终端名或模型名用作会话 ID。已有 local- ID 时继续传入，原生工具 hook 会将该命令中的临时 ID 绑定到真实身份；不要自行换成另一个 ID。缺少 ID 的请求不会创建活动。
@@ -146,7 +164,7 @@ export class Integrations {
 需要向用户提问或等待确认前，执行 enter 并加 --phase waiting；继续执行用 --phase executing。
 任务到达任何终态（成功、失败、阻塞、未合并、检查未通过、部分完成或需要后续处理）都算本次执行正常结束；不要因为结果内容或交付状态执行 --phase error。此时必须执行 --action exit --scope session，释放此会话涉及的目录。
 只有宿主明确返回模型接口故障（例如 stream disconnected、服务过载、额度/鉴权服务错误），导致模型请求本身未能正常完成时，才执行 enter 并加 --phase error --model-error '宿主返回的接口错误原文'；没有实际接口错误信息时禁止上报 error。普通命令失败、测试失败、Git 未合并、审查 finding 和任务阻塞都不属于此类故障。故障状态会保留到下一次 executing 上报。
-上报工具失联时快速静默返回，不改变原任务，不自动启动 Ebisu。不要创建脱离会话持续运行的无限心跳进程。
+上报命令任何情况都以 0 退出：成功返回 {"ok":true}；返回 {"ok":false,"reason":"ebisu-not-running"}、没有任何输出或非零退出都只说明 Ebisu 没有启动，不是任务失败。此时跳过本条和后续所有上报，立刻按原任务继续执行，绝不终止任务、不要求用户先启动 Ebisu、不自动启动 Ebisu、不重复重试。不要创建脱离会话持续运行的无限心跳进程。
 此规则只负责本机活动上报，不授权提交、推送、发消息等其他操作。若同时加载了其他终端的 Ebisu 规则，只使用实际宿主终端对应的命令，勿重复执行。
 ${end}`
   }

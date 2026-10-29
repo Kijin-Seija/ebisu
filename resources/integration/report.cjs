@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /* Ebisu 通知桥：无第三方依赖，可在 Electron 的 Node 模式下运行。
- * 无服务、权限受限和网络错误均静默失败；--check 才输出诊断结果。
+ * 无论服务是否在线都以 0 退出，绝不能阻断宿主任务；--check 才输出诊断结果。
+ * 手动调用返回 {"ok":...} 结论，原生 hook 调用保持 stdout 为空。
  */
 'use strict'
 const fs = require('node:fs')
@@ -9,6 +10,15 @@ const http = require('node:http')
 const crypto = require('node:crypto')
 const { homedir } = require('node:os')
 const { performance } = require('node:perf_hooks')
+
+/**
+ * 手动上报必须给出确定结论：空输出会被模型误读成任务失败并中止。
+ * hook 模式反过来必须保持 stdout 为空，否则会干扰宿主对 hook JSON 结果的解析。
+ */
+function manualStatus(args, ok, reason) {
+  if (args.hook || args.check || args['new-session']) return
+  process.stdout.write(ok ? '{"ok":true}\n' : `{"ok":false,"reason":"${reason}"}\n`)
+}
 
 /** 参数不经 eval 或 shell 展开，路径中的引号与命令替换只作为普通数据。 */
 function argumentsMap(argv) {
@@ -214,14 +224,23 @@ async function main() {
     process.stdout.write(`${environmentSession(terminal) || `local-${crypto.randomUUID()}`}\n`)
     return
   }
-  const runtime = JSON.parse(fs.readFileSync(String(args.runtime), 'utf8'))
+  let runtime
+  try {
+    runtime = JSON.parse(fs.readFileSync(String(args.runtime), 'utf8'))
+  } catch {
+    // 服务发现文件缺失或损坏只说明 Ebisu 没在运行，不是任务失败。
+    manualStatus(args, false, 'ebisu-not-running')
+    return
+  }
   if (
     !Number.isInteger(runtime.port) ||
     runtime.port < 1 ||
     runtime.port > 65535 ||
     typeof runtime.token !== 'string'
-  )
+  ) {
+    manualStatus(args, false, 'ebisu-not-running')
     return
+  }
   if (args.check) {
     const output = await request(runtime, 'GET', '/v1/health')
     process.stdout.write(output || '{"ok":false}')
@@ -254,7 +273,10 @@ async function main() {
     return
   const { sessionId, sessionAliases } = sessionIdentity(args, input, terminal)
   // 缺少身份时不再以桌面进程生成共享 ID。先 --new-session 再显式复用返回值。
-  if (!sessionId) return
+  if (!sessionId) {
+    manualStatus(args, false, 'missing-session-id')
+    return
+  }
   const toolInput = input.tool_input || input.toolInput || {}
   // Node 可能把 /var 解析为 /private/var；同时接受安装命令使用的原始路径。
   const ownBridges = [
@@ -300,8 +322,10 @@ async function main() {
     action === 'enter' &&
     phase === 'error' &&
     (typeof args['model-error'] !== 'string' || !args['model-error'].trim())
-  )
+  ) {
+    manualStatus(args, false, 'error-report-needs-model-error')
     return
+  }
   if (args.hook) {
     if (event === 'sessionstart') return
     if (event === 'stopfailure') {
@@ -353,26 +377,34 @@ async function main() {
   const taskTitle =
     typeof rawTitle === 'string' ? rawTitle.trim().slice(0, 512) || undefined : undefined
   let index = 0
+  // 只要有一个目录写入成功就算上报成功；全部失败等价于 Ebisu 没在运行。
+  let delivered = false
   for (const folder of paths) {
-    await request(runtime, 'POST', '/v1/activity', {
-      path: folder,
-      terminal,
-      sessionId,
-      sessionAliases,
-      action,
-      phase,
-      scope,
-      preserveWaiting,
-      sequence: sequence + index++,
-      model: typeof rawModel === 'string' ? rawModel : undefined,
-      taskTitle
-    })
+    if (
+      await request(runtime, 'POST', '/v1/activity', {
+        path: folder,
+        terminal,
+        sessionId,
+        sessionAliases,
+        action,
+        phase,
+        scope,
+        preserveWaiting,
+        sequence: sequence + index++,
+        model: typeof rawModel === 'string' ? rawModel : undefined,
+        taskTitle
+      })
+    )
+      delivered = true
   }
+  manualStatus(args, delivered, 'ebisu-not-running')
 }
 
 if (require.main === module)
   main().catch(() => {
+    // 任何意外都不能变成非零退出，否则绑定终端会把上报失败当成任务中止。
     if (process.argv.includes('--check')) process.stdout.write('{"ok":false}')
+    else manualStatus(argumentsMap(process.argv.slice(2)), false, 'ebisu-not-running')
   })
 module.exports = {
   argumentsMap,
