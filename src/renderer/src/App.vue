@@ -46,7 +46,12 @@ const dark = computed(
     (dashboard.snapshot?.settings.theme !== 'light' && systemDark.value)
 )
 const folders = computed(() => dashboard.views.folders)
-const remoteTasksEnabled = computed(() => dashboard.snapshot?.lan?.remoteExecution === true)
+// 远程执行开关或已有 Agent 对话时显示入口；对话浏览不需要远程执行权限。
+const remoteTasksEnabled = computed(
+  () =>
+    dashboard.snapshot?.lan?.remoteExecution === true ||
+    (dashboard.snapshot?.lan?.chats?.length ?? 0) > 0
+)
 watch(remoteTasksEnabled, (enabled) => {
   if (!enabled && page.value === 'remote-tasks') page.value = 'settings'
 })

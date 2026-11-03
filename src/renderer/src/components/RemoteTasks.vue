@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { NButton, NInput, NSelect, NTag, useMessage } from 'naive-ui'
-import { ListTodo, Plus, Send } from 'lucide-vue-next'
+import { ListTodo, MessagesSquare, Plus, Send } from 'lucide-vue-next'
 import { useDashboard } from '../store'
 import type { RemoteCommand, RemoteCommandTerminal, RemoteDevice } from '../../../shared/lan'
+import type { ChatChannelSummary, ChatMessage } from '../../../shared/chat'
+import AgentConversation, { type ConversationItem } from './AgentConversation.vue'
 
 interface TaskRecord {
   command: RemoteCommand
@@ -15,7 +17,11 @@ interface TaskRecord {
 const dashboard = useDashboard()
 const api = window.ebisu
 const message = useMessage()
-const tab = ref<'running' | 'create'>('running')
+const tab = ref<'running' | 'chats' | 'create'>('running')
+/** 当前打开的对话：Agent 频道或单条远程任务。 */
+const selected = ref<{ kind: 'chat' | 'command'; id: string } | null>(null)
+const chatMessages = ref<ChatMessage[]>([])
+const chatLoading = ref(false)
 const submitting = ref(false)
 const history = ref<TaskRecord[]>([])
 const selectedDevice = ref('')
@@ -67,6 +73,127 @@ const tasks = computed<TaskRecord[]>(() => {
 const activeTasks = computed(() =>
   tasks.value.filter((item) => ['queued', 'running', 'waiting'].includes(item.command.status))
 )
+const chats = computed<ChatChannelSummary[]>(() => dashboard.snapshot?.lan?.chats ?? [])
+const localDeviceId = computed(() => dashboard.snapshot?.lan?.device.id ?? '')
+/** 设备 ID 到名称：本机与已配对设备；未知设备显示短 ID。 */
+function deviceName(id: string) {
+  const lan = dashboard.snapshot?.lan
+  if (lan?.device.id === id) return `${lan.device.name}（本机）`
+  return lan?.peers.find((peer) => peer.id === id)?.name ?? id.slice(0, 8)
+}
+const selectedChat = computed(() =>
+  selected.value?.kind === 'chat' ? chats.value.find((c) => c.id === selected.value!.id) : undefined
+)
+const selectedTask = computed(() =>
+  selected.value?.kind === 'command'
+    ? tasks.value.find((t) => t.command.commandId === selected.value!.id)
+    : undefined
+)
+async function loadChat() {
+  const id = selected.value?.kind === 'chat' ? selected.value.id : null
+  if (!id) return
+  chatLoading.value = true
+  try {
+    const messages = await api.chatHistory(id)
+    if (selected.value?.id === id) chatMessages.value = messages
+  } catch (error) {
+    message.error(String(error), { duration: 6000 })
+  } finally {
+    chatLoading.value = false
+  }
+}
+// 频道摘要随快照刷新；最后一条消息变化时重新拉取完整历史。
+watch(
+  () => [selected.value?.id, selectedChat.value?.count, selectedChat.value?.last?.id],
+  () => void loadChat()
+)
+function open(kind: 'chat' | 'command', id: string) {
+  chatMessages.value = []
+  selected.value = { kind, id }
+}
+const conversation = computed(() => {
+  const chat = selectedChat.value
+  if (chat) {
+    const sorted = [...chatMessages.value].sort(
+      (a, b) => a.createdAt - b.createdAt || a.seq - b.seq
+    )
+    // 首个发言者（通常是主控）固定在右侧，其余参与者在左侧；各设备上布局一致。
+    const participants = [...new Set([...sorted.map((m) => m.from), ...chat.members])]
+    const items: ConversationItem[] = sorted.map((item) => ({
+      key: item.id,
+      author: item.from,
+      recipient: item.to ?? undefined,
+      device: deviceName(item.origin),
+      side: item.from === participants[0] ? 'right' : 'left',
+      type: item.type,
+      time: item.createdAt,
+      body: item.body
+    }))
+    return {
+      title: chat.title,
+      subtitle: `${chat.devices.map(deviceName).join(' · ')} · ${chat.count} 条消息`,
+      participants,
+      items
+    }
+  }
+  const task = selectedTask.value
+  if (!task) return null
+  const command = task.command
+  const target = task.outgoing ? task.deviceName : deviceName(localDeviceId.value)
+  const source = task.outgoing ? deviceName(localDeviceId.value) : task.deviceName
+  const agent = `${command.terminal}${command.sessionId ? ` · ${command.sessionId.slice(0, 12)}` : ''}`
+  const items: ConversationItem[] = [
+    {
+      key: 'prompt',
+      author: '发起方',
+      device: source,
+      side: task.outgoing ? 'right' : 'left',
+      type: 'task',
+      time: command.createdAt,
+      body: command.prompt
+    }
+  ]
+  if (command.result)
+    items.push({
+      key: 'result',
+      author: agent,
+      device: target,
+      side: task.outgoing ? 'left' : 'right',
+      type: command.result.status,
+      time: command.finishedAt ?? command.createdAt,
+      body: [command.result.summary, command.result.error].filter(Boolean).join('\n\n'),
+      detail: command.result.output
+    })
+  else
+    items.push({
+      key: 'pending',
+      author: agent,
+      device: target,
+      side: task.outgoing ? 'left' : 'right',
+      type: command.status,
+      time: command.startedAt ?? command.createdAt,
+      body: `${displayStatus(command.status)}…`,
+      pending: true
+    })
+  return {
+    title: `${command.terminal} 远程任务`,
+    subtitle: `${source} → ${target} · ${command.path}`,
+    participants: ['发起方', agent],
+    items
+  }
+})
+// 打开的对象被清理或消失时回到列表。
+watch(conversation, (value) => {
+  if (selected.value && !value && !chatLoading.value) selected.value = null
+})
+function shortTime(value: number) {
+  return new Date(value).toLocaleString([], {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
 const statusLabel: Record<string, string> = {
   queued: '排队中',
   running: '执行中',
@@ -153,115 +280,182 @@ async function cancel(item: TaskRecord) {
         <p>在已配对设备上创建会出现在对应终端会话列表中的任务。</p>
       </div>
     </div>
-    <div class="remote-task-tabs" role="tablist" aria-label="远程任务视图">
-      <button
-        role="tab"
-        :aria-selected="tab === 'running'"
-        :class="{ selected: tab === 'running' }"
-        @click="tab = 'running'"
-      >
-        <ListTodo :size="16" />正在执行
-        <span class="tab-count">{{ activeTasks.length }}</span>
-      </button>
-      <button
-        role="tab"
-        :aria-selected="tab === 'create'"
-        :class="{ selected: tab === 'create' }"
-        @click="tab = 'create'"
-      >
-        <Plus :size="16" />手动执行
-      </button>
-    </div>
-
-    <div v-if="tab === 'running'" class="remote-task-list">
-      <div v-if="!tasks.length" class="remote-task-empty">
-        <ListTodo :size="34" />
-        <strong>暂时没有远程任务</strong>
-        <span>选择“手动执行”在其他设备上创建一个 Agent 会话。</span>
-        <n-button type="primary" @click="tab = 'create'">创建远程任务</n-button>
+    <AgentConversation
+      v-if="conversation"
+      :title="conversation.title"
+      :subtitle="conversation.subtitle"
+      :participants="conversation.participants"
+      :items="conversation.items"
+      :loading="chatLoading"
+      @back="selected = null"
+    />
+    <template v-else>
+      <div class="remote-task-tabs" role="tablist" aria-label="远程任务视图">
+        <button
+          role="tab"
+          :aria-selected="tab === 'running'"
+          :class="{ selected: tab === 'running' }"
+          @click="tab = 'running'"
+        >
+          <ListTodo :size="16" />正在执行
+          <span class="tab-count">{{ activeTasks.length }}</span>
+        </button>
+        <button
+          role="tab"
+          :aria-selected="tab === 'chats'"
+          :class="{ selected: tab === 'chats' }"
+          @click="tab = 'chats'"
+        >
+          <MessagesSquare :size="16" />Agent 对话
+          <span class="tab-count">{{ chats.length }}</span>
+        </button>
+        <button
+          role="tab"
+          :aria-selected="tab === 'create'"
+          :class="{ selected: tab === 'create' }"
+          @click="tab = 'create'"
+        >
+          <Plus :size="16" />手动执行
+        </button>
       </div>
-      <template v-else>
-        <article v-for="item in tasks" :key="item.command.commandId" class="remote-task-card">
+
+      <div v-if="tab === 'running'" class="remote-task-list">
+        <div v-if="!tasks.length" class="remote-task-empty">
+          <ListTodo :size="34" />
+          <strong>暂时没有远程任务</strong>
+          <span>选择“手动执行”在其他设备上创建一个 Agent 会话。</span>
+          <n-button type="primary" @click="tab = 'create'">创建远程任务</n-button>
+        </div>
+        <template v-else>
+          <article
+            v-for="item in tasks"
+            :key="item.command.commandId"
+            class="remote-task-card clickable"
+            role="button"
+            tabindex="0"
+            @click="open('command', item.command.commandId)"
+            @keydown.enter="open('command', item.command.commandId)"
+          >
+            <div class="remote-task-card-head">
+              <div>
+                <div class="remote-task-title">
+                  <strong>{{ item.command.terminal }}</strong>
+                  <n-tag size="small" :type="statusType[item.command.status] ?? 'default'">
+                    {{ displayStatus(item.command.status) }}
+                  </n-tag>
+                </div>
+                <p class="remote-task-device">
+                  {{ item.outgoing ? '发送到' : '来自' }} {{ item.deviceName }}
+                </p>
+              </div>
+              <n-button
+                v-if="['queued', 'running', 'waiting'].includes(item.command.status)"
+                size="small"
+                secondary
+                @click.stop="cancel(item)"
+                >取消</n-button
+              >
+            </div>
+            <p class="remote-task-path">{{ item.command.path }}</p>
+            <p class="remote-task-prompt">{{ item.command.prompt }}</p>
+            <div class="remote-task-meta">
+              <span v-if="item.command.sessionId">会话 {{ item.command.sessionId }}</span>
+              <span v-if="item.command.result">{{ item.command.result.summary }}</span>
+            </div>
+          </article>
+        </template>
+      </div>
+
+      <div v-else-if="tab === 'chats'" class="remote-task-list">
+        <div v-if="!chats.length" class="remote-task-empty">
+          <MessagesSquare :size="34" />
+          <strong>暂时没有 Agent 对话</strong>
+          <span>Agent 通过 report --chat 创建频道并发消息后，会在所有参与设备上同步出现。</span>
+        </div>
+        <article
+          v-for="chat in chats"
+          v-else
+          :key="chat.id"
+          class="remote-task-card clickable"
+          role="button"
+          tabindex="0"
+          @click="open('chat', chat.id)"
+          @keydown.enter="open('chat', chat.id)"
+        >
           <div class="remote-task-card-head">
             <div>
               <div class="remote-task-title">
-                <strong>{{ item.command.terminal }}</strong>
-                <n-tag size="small" :type="statusType[item.command.status] ?? 'default'">
-                  {{ displayStatus(item.command.status) }}
-                </n-tag>
+                <strong>{{ chat.title }}</strong>
+                <n-tag size="small">{{ chat.count }} 条</n-tag>
               </div>
               <p class="remote-task-device">
-                {{ item.outgoing ? '发送到' : '来自' }} {{ item.deviceName }}
+                {{ chat.members.join('、') || '暂无参与者' }}
               </p>
             </div>
-            <n-button
-              v-if="['queued', 'running', 'waiting'].includes(item.command.status)"
-              size="small"
-              secondary
-              @click="cancel(item)"
-              >取消</n-button
-            >
+            <span class="section-meta">{{
+              shortTime(chat.last?.createdAt ?? chat.updatedAt)
+            }}</span>
           </div>
-          <p class="remote-task-path">{{ item.command.path }}</p>
-          <p class="remote-task-prompt">{{ item.command.prompt }}</p>
+          <p v-if="chat.last" class="remote-task-prompt chat-preview">
+            <strong>{{ chat.last.from }}：</strong>{{ chat.last.body }}
+          </p>
           <div class="remote-task-meta">
-            <span v-if="item.command.sessionId">会话 {{ item.command.sessionId }}</span>
-            <span v-if="item.command.result">{{ item.command.result.summary }}</span>
+            <span>{{ chat.devices.map(deviceName).join(' · ') }}</span>
           </div>
         </article>
-      </template>
-    </div>
-
-    <div v-else class="remote-task-composer">
-      <div class="remote-task-composer-intro">
-        <Send :size="26" />
-        <div>
-          <h2>创建远程会话</h2>
-          <p>任务会在目标设备的对应终端中创建真实会话，并出现在该终端的会话列表。</p>
-        </div>
       </div>
-      <div class="remote-task-form-grid">
-        <label>
-          <span>远程设备</span>
-          <n-select
-            v-model:value="selectedDevice"
-            :options="deviceOptions"
-            placeholder="选择已配对设备"
-            :disabled="!deviceOptions.length"
+
+      <div v-else class="remote-task-composer">
+        <div class="remote-task-composer-intro">
+          <Send :size="26" />
+          <div>
+            <h2>创建远程会话</h2>
+            <p>任务会在目标设备的对应终端中创建真实会话，并出现在该终端的会话列表。</p>
+          </div>
+        </div>
+        <div class="remote-task-form-grid">
+          <label>
+            <span>远程设备</span>
+            <n-select
+              v-model:value="selectedDevice"
+              :options="deviceOptions"
+              placeholder="选择已配对设备"
+              :disabled="!deviceOptions.length"
+            />
+          </label>
+          <label>
+            <span>终端</span>
+            <n-select v-model:value="form.terminal" :options="terminalOptions" />
+          </label>
+          <label class="remote-task-path-field">
+            <span>远端项目路径</span>
+            <n-input v-model:value="form.path" placeholder="/Users/you/code/project" />
+          </label>
+        </div>
+        <label class="remote-task-prompt-field">
+          <span>任务提示词</span>
+          <n-input
+            v-model:value="form.prompt"
+            type="textarea"
+            :autosize="{ minRows: 8, maxRows: 16 }"
+            placeholder="描述你希望远程 Agent 完成的任务…"
           />
         </label>
-        <label>
-          <span>终端</span>
-          <n-select v-model:value="form.terminal" :options="terminalOptions" />
-        </label>
-        <label class="remote-task-path-field">
-          <span>远端项目路径</span>
-          <n-input v-model:value="form.path" placeholder="/Users/you/code/project" />
-        </label>
+        <div class="remote-task-composer-footer">
+          <span v-if="!deviceOptions.length" class="section-meta">没有在线的已配对设备</span>
+          <span v-else class="section-meta">任务将在远程设备自动执行，并返回结构化结论。</span>
+          <n-button
+            type="primary"
+            size="large"
+            :loading="submitting"
+            :disabled="!deviceOptions.length"
+            @click="submit"
+          >
+            <template #icon><Send :size="16" /></template>
+            创建远程会话
+          </n-button>
+        </div>
       </div>
-      <label class="remote-task-prompt-field">
-        <span>任务提示词</span>
-        <n-input
-          v-model:value="form.prompt"
-          type="textarea"
-          :autosize="{ minRows: 8, maxRows: 16 }"
-          placeholder="描述你希望远程 Agent 完成的任务…"
-        />
-      </label>
-      <div class="remote-task-composer-footer">
-        <span v-if="!deviceOptions.length" class="section-meta">没有在线的已配对设备</span>
-        <span v-else class="section-meta">任务将在远程设备自动执行，并返回结构化结论。</span>
-        <n-button
-          type="primary"
-          size="large"
-          :loading="submitting"
-          :disabled="!deviceOptions.length"
-          @click="submit"
-        >
-          <template #icon><Send :size="16" /></template>
-          创建远程会话
-        </n-button>
-      </div>
-    </div>
+    </template>
   </section>
 </template>

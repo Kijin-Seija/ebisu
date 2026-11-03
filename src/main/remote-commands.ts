@@ -67,6 +67,8 @@ export class RemoteCommands {
     this.changed = options.changed ?? (() => {})
     this.resolveExecutable = options.resolveExecutable ?? defaultExecutable
     store.db.exec(`
+      -- 远程执行开关保存在 lan_state；单独使用 RemoteCommands 时也要保证该表存在。
+      CREATE TABLE IF NOT EXISTS lan_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS remote_commands (
         commandId TEXT PRIMARY KEY,
         requestId TEXT NOT NULL,

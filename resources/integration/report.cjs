@@ -272,6 +272,10 @@ async function main() {
     manualStatus(args, false, 'ebisu-not-running')
     return
   }
+  if (args.chat) {
+    await chatMain(args, runtime, terminal)
+    return
+  }
   if (args.check) {
     const output = await request(runtime, 'GET', '/v1/health')
     process.stdout.write(output || '{"ok":false}')
@@ -482,6 +486,166 @@ async function main() {
       delivered = true
   }
   manualStatus(args, delivered, 'ebisu-not-running')
+}
+
+/** 对话接口请求：不截断响应，超时时间由调用方按长轮询时长设置。 */
+function chatRequest(runtime, method, route, data, timeout) {
+  return new Promise((resolve) => {
+    const body = data ? JSON.stringify(data) : undefined
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: runtime.port,
+        path: route,
+        method,
+        headers: {
+          Authorization: `Bearer ${runtime.token}`,
+          'Content-Type': 'application/json',
+          ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {})
+        },
+        timeout
+      },
+      (response) => {
+        const chunks = []
+        response.on('data', (chunk) => chunks.push(chunk))
+        response.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8')
+          try {
+            const parsed = JSON.parse(text)
+            resolve(
+              response.statusCode === 200
+                ? parsed
+                : {
+                    ok: false,
+                    reason: parsed.error || `http-${response.statusCode}`,
+                    details: parsed.details
+                  }
+            )
+          } catch {
+            resolve({ ok: false, reason: `http-${response.statusCode}` })
+          }
+        })
+        response.on('error', () => resolve({ ok: false, reason: 'ebisu-not-running' }))
+      }
+    )
+    req.on('timeout', () => {
+      req.destroy()
+      resolve({ ok: false, reason: 'timeout' })
+    })
+    req.on('error', () => resolve({ ok: false, reason: 'ebisu-not-running' }))
+    req.end(body)
+  })
+}
+
+/** 读取消息正文：--body 文本，--body - 或 --body-file - 读 stdin，--body-file 读文件。 */
+function chatBody(args) {
+  if (args['body-file'] === '-' || args.body === '-') return fs.readFileSync(0, 'utf8')
+  if (typeof args['body-file'] === 'string') return fs.readFileSync(args['body-file'], 'utf8')
+  return typeof args.body === 'string' ? args.body : ''
+}
+
+/** 默认参与者名称：短主机名/终端，例如 almondeMac22-Mini/qoder。 */
+function defaultMember(terminal) {
+  const host = require('node:os')
+    .hostname()
+    .replace(/\.local$/, '')
+  return `${host}/${terminal || 'agent'}`.replace(/[^A-Za-z0-9._@/:-]/g, '-')
+}
+
+/**
+ * Agent 对话子命令；输出单行 JSON，任何情况下都以 0 退出。
+ * devices | channels | create | post | wait | history | ack
+ */
+async function chatMain(args, runtime, terminal) {
+  const command = typeof args.chat === 'string' ? args.chat : ''
+  const member = typeof args.member === 'string' ? args.member : defaultMember(terminal)
+  const list = (value) =>
+    typeof value === 'string'
+      ? value
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : undefined
+  let result
+  switch (command) {
+    case 'devices':
+      result = await chatRequest(runtime, 'GET', '/v1/chat/devices', undefined, 5000)
+      break
+    case 'channels':
+      result = await chatRequest(runtime, 'GET', '/v1/chat/channels', undefined, 5000)
+      break
+    case 'create':
+      result = await chatRequest(
+        runtime,
+        'POST',
+        '/v1/chat/channels',
+        {
+          id: args.channel,
+          ...(typeof args.title === 'string' ? { title: args.title } : {}),
+          ...(list(args.devices) ? { devices: list(args.devices) } : {}),
+          members: [member, ...(list(args.members) ?? [])]
+        },
+        5000
+      )
+      break
+    case 'post':
+      result = await chatRequest(
+        runtime,
+        'POST',
+        '/v1/chat/messages',
+        {
+          channel: args.channel,
+          from: member,
+          ...(typeof args.to === 'string' ? { to: args.to } : {}),
+          ...(typeof args.type === 'string' ? { type: args.type } : {}),
+          ...(typeof args['reply-to'] === 'string' ? { replyTo: args['reply-to'] } : {}),
+          ...(typeof args['client-id'] === 'string' ? { clientId: args['client-id'] } : {}),
+          body: chatBody(args)
+        },
+        5000
+      )
+      break
+    case 'wait': {
+      const timeout = Math.min(Math.max(Number(args.timeout ?? 240) || 0, 0), 900)
+      const query = new URLSearchParams({
+        member,
+        channel: typeof args.channel === 'string' ? args.channel : '*',
+        timeout: String(timeout)
+      })
+      if (args.all) query.set('all', '1')
+      if (args.peek) query.set('peek', '1')
+      result = await chatRequest(
+        runtime,
+        'GET',
+        `/v1/chat/wait?${query}`,
+        undefined,
+        timeout * 1000 + 10000
+      )
+      break
+    }
+    case 'history': {
+      const query = new URLSearchParams({ channel: String(args.channel ?? '') })
+      if (args.since) query.set('since', String(args.since))
+      if (args.limit) query.set('limit', String(args.limit))
+      result = await chatRequest(runtime, 'GET', `/v1/chat/messages?${query}`, undefined, 5000)
+      break
+    }
+    case 'ack':
+      result = await chatRequest(
+        runtime,
+        'POST',
+        '/v1/chat/ack',
+        {
+          member,
+          messages: [{ channel: String(args.channel ?? ''), seq: Number(args.seq) }]
+        },
+        5000
+      )
+      break
+    default:
+      result = { ok: false, reason: 'unknown-chat-command' }
+  }
+  process.stdout.write(`${JSON.stringify(result)}\n`)
 }
 
 if (require.main === module)

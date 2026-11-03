@@ -1690,6 +1690,160 @@ button:focus-visible {
   flex-wrap: wrap;
   gap: 12px;
 }
+.remote-task-card.clickable {
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.remote-task-card.clickable:hover,
+.remote-task-card.clickable:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+.chat-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--secondary);
+}
+.chat-preview strong {
+  color: var(--text);
+}
+/* Agent 对话流：本机一侧靠右，其他设备靠左。 */
+.conversation {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 150px);
+  min-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.conversation-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.conversation-title {
+  min-width: 0;
+  flex: 1;
+}
+.conversation-title h2 {
+  margin: 0;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.conversation-title p {
+  margin: 4px 0 0;
+  color: var(--secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.conversation-participants {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 45%;
+}
+.participant {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 12px;
+  font-weight: 600;
+}
+.conversation-scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 18px 24px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+.bubble-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 78%;
+}
+.bubble-row.right {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.bubble-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 4px 5px;
+  color: var(--faint);
+  font-size: 11px;
+}
+.bubble-meta strong {
+  font-size: 12px;
+}
+.bubble {
+  max-width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px 14px 14px 14px;
+  background: var(--panel);
+}
+.bubble-row.right .bubble {
+  border-color: transparent;
+  border-radius: 14px 4px 14px 14px;
+  background: var(--accent-soft);
+}
+.bubble-row.pending .bubble {
+  border-style: dashed;
+  color: var(--secondary);
+}
+.bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+  font-size: 13.5px;
+}
+.bubble details {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.bubble summary {
+  color: var(--secondary);
+  cursor: pointer;
+}
+.bubble pre {
+  max-height: 360px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tone-0 {
+  color: var(--accent);
+}
+.tone-1 {
+  color: var(--success);
+}
+.tone-2 {
+  color: var(--amber);
+}
+.tone-3 {
+  color: var(--secondary);
+}
 .remote-task-composer {
   max-width: 820px;
   padding: 28px 30px;
@@ -1788,5 +1942,11 @@ button:focus-visible {
   .remote-task-composer-footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .bubble-row {
+    max-width: 92%;
+  }
+  .conversation-participants {
+    display: none;
   }
 }

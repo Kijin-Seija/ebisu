@@ -113,6 +113,8 @@ HTTP 创建载荷中的 `package.files` 为 `{相对路径:{content,encoding?:"u
 | `POST /lan/v1/commands`            | 已配对设备提交远程 Agent 任务；接收端必须开启远程执行开关，返回 queued 任务                      |
 | `GET /lan/v1/commands/:id`         | 读取提交方自己的远程任务状态和结构化结论                                                         |
 | `POST /lan/v1/commands/:id/cancel` | 取消提交方自己的运行中任务                                                                       |
+| `POST /lan/v1/chat/push`           | Agent 对话即时推送 `{ channels, messages }`，只接受双方共同持有的频道                            |
+| `POST /lan/v1/chat/sync`           | Agent 对话补齐：请求各频道版本向量，返回对端缺失的消息（单批 200 条，`more` 表示还有）           |
 
 除上述配对接口外，必须通过已配对证书的双向 TLS 认证。服务拒绝浏览器 Origin，不提供活动上报、变量读取、经验、安装、运行或其他写操作。发现信息中的地址不能建立信任，客户端必须先校验证书指纹再发送 HTTP 数据；目标设备记录的是 TLS 客户端证书指纹，不采用请求体自报的指纹。
 
@@ -121,3 +123,44 @@ HTTP 创建载荷中的 `package.files` 为 `{相对路径:{content,encoding?:"u
 远程任务请求为 `{ requestId, terminal, path, prompt }`，目前支持 `codex`、`claude`、`dsh` 和 `qoder`。`path` 必须是接收设备上的绝对目录；请求不会经过 shell。终端适配器必须使用自己的非交互 JSON 模式并返回真实会话 ID（例如 Codex 的 `thread_id`、Claude 的 `session_id`）；没有真实 ID 的结果会失败，不能用 Ebisu 内部任务 ID 冒充终端会话。只要终端本身持久化该会话，它就会出现在该终端的会话列表中。任务状态为 `queued`、`running`、`waiting`、`completed`、`failed` 或 `cancelled`，完成后返回退出码、摘要、截断后的输出和错误信息。`requestId` 在同一来源设备上幂等，任务记录保存在接收设备数据库中；应用重启会把未完成任务标记为失败，不会自动重启 Agent。只有接收设备显式开启“允许远程 Agent 自动执行”后，已配对设备才能创建任务。
 
 preload 新增设备配置、请求配对/确认或拒绝请求、解除配对、读取远端技能、准备导入与确认导入业务接口，不暴露通用网络能力。导入草稿十五分钟有效、最多保留十六份；确认允许改名及修改已有 UTF-8 文本，不允许增加路径或修改二进制文件。来源设备身份、原技能 ID、原包哈希单独记录在本机数据库；重试相同草稿和输入返回同一本机技能 ID。
+
+## Agent 对话（协议 v1）
+
+多个终端会话之间的文本消息通道。每台参与设备持有频道的完整副本，**agent 只调用本机 `127.0.0.1` 接口**，跨设备复制由 Ebisu 经已配对的双向 TLS 通道完成。
+
+### 模型
+
+- 频道 `{ id, title, devices, members }`：`id` 如 `control`、`bug/STRATEGY-4287`；`devices` 为持有副本的设备 ID，`members` 为出现过的参与者名称，二者都只增不减、合并取并集。
+- 消息只追加不修改：`id = origin:counter`，`counter` 是来源设备在该频道内从 1 开始的连续计数，因此多设备并发写入没有冲突。
+- 复制：本机写入后立即推送给频道内其他设备；每 2 秒轮询在线对端时，用版本向量（各来源设备已连续持有的最大计数）补齐缺失消息。对端离线、推送失败或 Ebisu 重启都不会丢消息。同步会转发第三方来源的消息，未直接配对的设备可经中间设备获得消息。
+- 不同设备看到的跨设备先后顺序可能略有差异；需要严格顺序的事情（例如认领）不应依赖对话。
+- 只接受频道定义同时包含本机与对端、且来源设备也在频道内的消息；未配对证书返回 401。
+
+### 本机接口（bearer 认证同上）
+
+| 接口                     | 行为                                                                                                     |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `GET /v1/chat/devices`   | 本机与已配对设备 `{ id, name, self, online }`                                                            |
+| `GET /v1/chat/channels`  | 频道摘要（含消息数与最后一条消息）                                                                       |
+| `POST /v1/chat/channels` | `{ id, title?, devices?, members? }` 创建或合并频道；`devices` 可写设备 ID 或名称（忽略大小写与 .local） |
+| `POST /v1/chat/messages` | `{ channel, from, to?, type?, body, replyTo?, clientId? }`；正文上限 32 KiB，`clientId` 幂等             |
+| `GET /v1/chat/messages`  | `?channel=&since=&limit=` 读取历史                                                                       |
+| `GET /v1/chat/wait`      | `?member=&channel=a,b 或 *&timeout=秒(≤900)&all=1&peek=1` 长轮询                                         |
+| `POST /v1/chat/ack`      | `{ member, messages:[{channel,seq}] }` 推进游标（配合 `peek` 使用）                                      |
+
+`wait` 返回该参与者游标之后、非自己发出、且 `to` 为空或等于自己的消息（`all=1` 时不按 `to` 过滤）；有消息立即返回，否则等到新消息或超时（`timeout: true`）。默认返回即推进游标，`peek=1` 不推进。显式等待某频道即加入该频道，`channel=*` 表示已加入的全部频道。游标保存在本机，按参与者名称区分，会话重启后沿用。
+
+### 命令行
+
+通知桥 `report` 提供同名子命令，输出单行 JSON，始终以 0 退出：
+
+```sh
+report --terminal claude --chat devices
+report --terminal claude --chat create --channel bug/STRATEGY-4287 --title "..." --devices almondeMac22-Mini,jiedeMac-mini11
+# 正文从 stdin 读取，内容不经 shell 展开
+report --terminal claude --chat post --channel bug/STRATEGY-4287 --to almondeMac22-Mini/qoder --type task --body-file - < body.md
+report --terminal qoder --chat wait --channel 'control,bug/STRATEGY-4287' --timeout 540
+report --terminal qoder --chat history --channel bug/STRATEGY-4287
+```
+
+`--member` 默认为 `短主机名/终端`（例如 `almondeMac22-Mini/qoder`）。`wait` 的 `--timeout` 应小于所在终端单条命令的超时上限。界面“远程任务 → Agent 对话”以对话流展示频道内容，点击远程任务也会以对话流展示任务提示与结论。

@@ -331,6 +331,7 @@ function installIpc(): void {
   handle('cancel-local-command', (command: unknown) =>
     lan.cancelLocalCommand(z.string().uuid().parse(command))
   )
+  handle('chat-history', (channel: unknown) => lan.chat.history(z.string().parse(channel)))
   handle('snapshot', snapshot)
   handle('skill-detail', (id: unknown) => skills.detail(z.string().parse(id)))
   handle(
@@ -575,7 +576,13 @@ async function boot(): Promise<void> {
       : new Response('Not found', { status: 404 })
   })
   try {
-    service = await startServer(store, path.join(dataDirectory, 'runtime.json'), changed, skills)
+    service = await startServer(
+      store,
+      path.join(dataDirectory, 'runtime.json'),
+      changed,
+      skills,
+      lan.chat
+    )
   } catch (error) {
     serviceError = String(error)
     console.error('本机服务启动失败:', error)

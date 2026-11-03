@@ -568,3 +568,72 @@ it('发现新的端口须先通过已配对证书认证，伪造发现不能替�
   await b.lan.poll()
   expect(b.lan.view().peers[0]).toMatchObject({ address: nextAddress, online: true })
 })
+
+it('Agent 对话：写入立即推送到对端，双向回复，对端可按名称加入频道', async () => {
+  const a = await make()
+  const b = await make()
+  await pair(a, b)
+  const channel = a.lan.chat.createChannel({
+    id: 'bug/STRATEGY-1',
+    devices: ['Computer B'],
+    members: ['a/claude']
+  })
+  expect(channel.devices).toEqual([a.lan.device().id, b.lan.device().id])
+  await until(() => !!b.lan.chat.channel('bug/STRATEGY-1'))
+  const waiting = b.lan.chat.wait({ member: 'b/qoder', channels: ['bug/STRATEGY-1'], timeout: 5 })
+  a.lan.chat.post({ channel: 'bug/STRATEGY-1', from: 'a/claude', body: '请修复' })
+  expect((await waiting).map((m) => m.body)).toEqual(['请修复'])
+  b.lan.chat.post({ channel: 'bug/STRATEGY-1', from: 'b/qoder', body: '已修复' })
+  expect(
+    (await a.lan.chat.wait({ member: 'a/claude', channels: ['*'], timeout: 5 })).map((m) => m.body)
+  ).toEqual(['已修复'])
+  // 两端历史一致，频道摘要进入 LAN 视图
+  expect(b.lan.chat.history('bug/STRATEGY-1').map((m) => m.id)).toEqual(
+    a.lan.chat.history('bug/STRATEGY-1').map((m) => m.id)
+  )
+  expect(a.lan.view().chats[0]).toMatchObject({ id: 'bug/STRATEGY-1', count: 2 })
+})
+
+it('Agent 对话：推送失败时由轮询同步补齐，并经中间设备转发给未直接配对的设备', async () => {
+  const a = await make()
+  const b = await make()
+  const c = await make()
+  await pair(a, b)
+  // c 只与 b 配对
+  await start(c, 'Computer C')
+  announce(c, b)
+  const pending = c.lan.requestPair(b.lan.device().id)
+  await until(() => b.lan.view().requests.length > 0)
+  await b.lan.respondPair(b.lan.view().requests[0].id, true)
+  await c.lan.poll()
+  expect(await pending).toBe('paired')
+  await b.lan.poll()
+  // 频道包含三台设备：c 由 b 创建时加入，a 再通过并集合并得到 c
+  b.lan.chat.createChannel({ id: 'control', devices: [a.lan.device().id, c.lan.device().id] })
+  await until(() => !!a.lan.chat.channel('control') && !!c.lan.chat.channel('control'))
+  expect(a.lan.chat.channel('control')!.devices).toHaveLength(3)
+  // 关闭 a 的即时推送，验证版本向量同步
+  ;(a.lan as unknown as { pushChat: () => void }).pushChat = () => {}
+  for (let i = 1; i <= 3; i++)
+    a.lan.chat.post({ channel: 'control', from: 'a/main', body: `m${i}` })
+  expect(b.lan.chat.history('control')).toHaveLength(0)
+  await b.lan.poll()
+  expect(b.lan.chat.history('control').map((m) => m.body)).toEqual(['m1', 'm2', 'm3'])
+  // c 与 a 未配对，经 b 同步获得 a 的消息
+  await c.lan.poll()
+  expect(c.lan.chat.history('control').map((m) => m.body)).toEqual(['m1', 'm2', 'm3'])
+  expect(c.lan.chat.history('control')[0].origin).toBe(a.lan.device().id)
+  // 重复同步不会产生重复消息
+  await b.lan.poll()
+  await c.lan.poll()
+  expect(c.lan.chat.history('control')).toHaveLength(3)
+})
+
+it('Agent 对话：未配对证书无法访问对话接口', async () => {
+  const a = await make()
+  const stranger = await make()
+  await start(a, 'Computer A')
+  await start(stranger, 'Stranger')
+  const response = await raw(stranger, a.lan.view().port!, '/lan/v1/chat/sync')
+  expect(response.status).toBe(401)
+})

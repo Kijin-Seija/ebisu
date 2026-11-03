@@ -23,6 +23,7 @@ import { packageSchema, SkillError, type Skills } from './skills'
 import type { Store } from './database'
 import { SkillTransfer, packageHash } from './skill-transfer'
 import { RemoteCommands, isRemoteCommandTerminal } from './remote-commands'
+import { Chat, matchesDevice, type ChatPush } from './chat'
 
 const PROTOCOL = 1
 const MAX_BODY = 12 * 1024 * 1024
@@ -173,6 +174,7 @@ interface Options {
 export class Lan {
   readonly transfer: SkillTransfer
   readonly commands: RemoteCommands
+  readonly chat: Chat
   private identity!: Identity
   private enabled = false
   private server?: Server
@@ -212,6 +214,7 @@ export class Lan {
       now: this.now,
       changed: options.changed
     })
+    this.chat = new Chat(store, () => this.device(), { now: this.now, changed: options.changed })
     store.db.exec(`CREATE TABLE IF NOT EXISTS lan_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS lan_peers(id TEXT PRIMARY KEY,value TEXT NOT NULL);`)
     for (const row of store.db.prepare('SELECT id,value FROM lan_peers').all() as {
@@ -219,6 +222,38 @@ export class Lan {
       value: string
     }[])
       this.peers.set(row.id, JSON.parse(row.value))
+    this.chat.attach(
+      {
+        list: () => [
+          { id: this.identity.id, name: this.identity.name, self: true, online: true },
+          ...[...this.peers.values()].map((peer) => ({
+            id: peer.device.id,
+            name: peer.device.name,
+            self: false,
+            online: this.online(peer)
+          }))
+        ],
+        resolve: (value) => {
+          if (matchesDevice(value, this.identity.id, this.identity.name)) return this.identity.id
+          return (
+            [...this.peers.values()].find((peer) =>
+              matchesDevice(value, peer.device.id, peer.device.name)
+            )?.device.id ?? null
+          )
+        }
+      },
+      (devices, payload) => this.pushChat(devices, payload)
+    )
+  }
+  /** 对端最近一次快照在 15 秒内成功即视为在线。 */
+  private online(peer: Peer): boolean {
+    return (
+      this.enabled &&
+      !!this.server &&
+      peer.lastSeen !== null &&
+      this.now() - peer.lastSeen < 15000 &&
+      peer.device.protocol === PROTOCOL
+    )
   }
   async initialize(): Promise<void> {
     const file = path.join(this.options.directory, 'lan-identity.json')
@@ -300,18 +335,14 @@ export class Lan {
       peers: [...this.peers.values()].map((peer) => ({
         ...peer.device,
         address: peer.address,
-        online:
-          this.enabled &&
-          !!this.server &&
-          peer.lastSeen !== null &&
-          now - peer.lastSeen < 15000 &&
-          peer.device.protocol === PROTOCOL,
+        online: this.online(peer),
         lastSeen: peer.lastSeen,
         error: peer.error,
         snapshot: peer.snapshot
       })),
       remoteExecution: this.commands.enabled(),
-      commands: this.commands.list()
+      commands: this.commands.list(),
+      chats: this.chat.summaries()
     }
   }
   configure(enabled: boolean, name: string, restart = false): Promise<void> {
@@ -476,6 +507,17 @@ export class Lan {
               (item) => item.fingerprint === remoteFingerprint
             )
             if (!peer) throw new SkillError(401, '设备未配对或已撤销')
+            // 对话复制：推送与版本向量同步都只接受双方共同持有的频道。
+            if (req.method === 'POST' && url === '/lan/v1/chat/push') {
+              send(200, {
+                accepted: this.chat.ingest(peer.device.id, await readJson(8 * 1024 * 1024))
+              })
+              return
+            }
+            if (req.method === 'POST' && url === '/lan/v1/chat/sync') {
+              send(200, this.chat.answerSync(peer.device.id, await readJson(1024 * 1024)))
+              return
+            }
             if (req.method === 'POST' && url === '/lan/v1/commands') {
               const command = await this.commands.create(
                 peer.device,
@@ -975,13 +1017,49 @@ export class Lan {
       this.prunePairs()
       const peers = [...this.peers.values()]
       for (let i = 0; this.enabled && this.server && i < peers.length; i += 4)
-        await Promise.all(peers.slice(i, i + 4).map((peer) => this.refreshPeer(peer)))
+        await Promise.all(
+          peers.slice(i, i + 4).map(async (peer) => {
+            await this.refreshPeer(peer)
+            if (this.online(peer)) await this.syncChat(peer)
+          })
+        )
       // 已发起的配对请求由主进程统一轮询，界面关闭后也能完成配对。
       await Promise.all([...this.outgoingPairs.values()].map((entry) => this.checkOutgoing(entry)))
     })().finally(() => {
       this.polling = undefined
     })
     return this.polling
+  }
+  /** 拉取对端持有而本机缺失的对话消息；单轮最多连续拉取 5 批。 */
+  private async syncChat(peer: Peer): Promise<void> {
+    try {
+      for (let round = 0; round < 5; round++) {
+        const request = this.chat.syncRequest(peer.device.id)
+        const response = await this.fetch(
+          peer.address,
+          peer.fingerprint,
+          '/lan/v1/chat/sync',
+          request
+        )
+        if (!this.enabled || this.peers.get(peer.device.id) !== peer) return
+        const body = response.body as ChatPush & { more?: boolean }
+        this.chat.ingest(peer.device.id, { channels: body.channels, messages: body.messages })
+        if (!body.more) return
+      }
+    } catch {
+      /* 旧版本对端不支持对话或网络瞬断；下一轮轮询重试。 */
+    }
+  }
+  /** 本机写入后立即推送；离线或失败的设备由 syncChat 补齐。 */
+  private pushChat(devices: string[], payload: ChatPush): void {
+    if (!this.enabled || !this.server) return
+    for (const id of devices) {
+      const peer = this.peers.get(id)
+      if (!peer) continue
+      void this.fetch(peer.address, peer.fingerprint, '/lan/v1/chat/push', payload).catch(
+        () => undefined
+      )
+    }
   }
   async remoteSkill(deviceId: string, skillId: string): Promise<SkillExport> {
     const peer = this.peers.get(z.string().uuid().parse(deviceId))
@@ -1075,6 +1153,7 @@ export class Lan {
     await this.configuring.catch(() => undefined)
     this.enabled = false
     this.commands.close()
+    this.chat.close()
     await this.stop()
   }
 }

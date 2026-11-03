@@ -1,5 +1,6 @@
 import type { FolderView, TerminalId } from './types'
 import type { SkillPackage, SkillSummary } from './skills'
+import type { ChatChannelSummary, ChatMessage } from './chat'
 
 export interface DeviceIdentity {
   id: string
@@ -80,6 +81,8 @@ export interface LanView {
   peers: RemoteDevice[]
   remoteExecution: boolean
   commands: RemoteCommand[]
+  /** 本机持有副本的 Agent 对话频道摘要。 */
+  chats: ChatChannelSummary[]
 }
 export interface SkillExport {
   skillId: string
@@ -109,4 +112,5 @@ export interface DeviceApi {
   remoteCommandStatus(deviceId: string, commandId: string): Promise<RemoteCommand>
   cancelRemoteCommand(deviceId: string, commandId: string): Promise<RemoteCommand>
   cancelLocalCommand(commandId: string): Promise<RemoteCommand>
+  chatHistory(channel: string): Promise<ChatMessage[]>
 }
