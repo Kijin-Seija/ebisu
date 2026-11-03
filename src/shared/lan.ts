@@ -1,6 +1,6 @@
 import type { FolderView, TerminalId } from './types'
 import type { SkillPackage, SkillSummary } from './skills'
-import type { ChatChannelSummary, ChatMessage } from './chat'
+import type { ChatChannelSummary, ChatMessage, ChatTombstone } from './chat'
 
 export interface DeviceIdentity {
   id: string
@@ -113,4 +113,6 @@ export interface DeviceApi {
   cancelRemoteCommand(deviceId: string, commandId: string): Promise<RemoteCommand>
   cancelLocalCommand(commandId: string): Promise<RemoteCommand>
   chatHistory(channel: string): Promise<ChatMessage[]>
+  /** 删除频道：本机与其他持有副本的设备都会删除。 */
+  deleteChat(channel: string): Promise<ChatTombstone>
 }

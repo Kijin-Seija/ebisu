@@ -26,7 +26,10 @@ Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；�
   done    --channel <id> --id <messageId> [--body t]                   不回复对方，仅标记已处理
   history --channel <id> [--limit 200]     频道历史
   binding --channel <id>                   本参与者在该频道最近绑定的会话
+  delete  --channel <id>                   删除频道及全部消息；本机与其他持有副本的设备都会删除
 认领、进展和完成标记都通过 replyTo 指向原消息；inbox 只依据对话内容计算，可在任意会话重复调用。
+频道对话全部完成后（主控确认结果、无待处理消息）应执行 delete 删除该频道；删除后可用同名 create 重新创建。
+每台设备每 8 小时自动删除最近 8 小时内没有新消息的频道，长期任务请定期 progress 保持活跃。
 `
 /** 只作为状态标记、不需要对方处理的消息类型。 */
 const MARKERS = new Set(['claim', 'progress', 'done'])
@@ -300,6 +303,11 @@ async function main() {
         ok: true,
         binding: bindingOf(await history(runtime, need(options, 'channel')), me)
       }
+      break
+    case 'delete':
+      result = await api(runtime, 'POST', '/v1/chat/channels/delete', {
+        id: need(options, 'channel')
+      })
       break
     default:
       fail(`unknown command: ${command}`)

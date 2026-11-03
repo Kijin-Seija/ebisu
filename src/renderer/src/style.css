@@ -1654,6 +1654,12 @@ button:focus-visible {
   border-radius: 13px;
   background: var(--panel);
 }
+.chat-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
 .remote-task-card-head {
   display: flex;
   justify-content: space-between;

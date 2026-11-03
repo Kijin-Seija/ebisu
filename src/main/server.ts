@@ -221,6 +221,12 @@ async function chatRoute(
         channel: chat.createChannel((await readBody(request, 65536)) as never)
       })
       return
+    case 'POST /v1/chat/channels/delete': {
+      // 频道 ID 可包含 /，因此用请求体传递而不是放在路径里。
+      const body = z.object({ id: z.string() }).parse(await readBody(request, 65536))
+      send(response, 200, { ok: true, deleted: chat.deleteChannel(body.id) })
+      return
+    }
     case 'POST /v1/chat/messages':
       send(response, 200, {
         ok: true,

@@ -1,7 +1,13 @@
 import { z } from 'zod'
 import type { Store } from './database'
 import type { DeviceIdentity } from '../shared/lan'
-import type { ChatChannel, ChatChannelSummary, ChatDevice, ChatMessage } from '../shared/chat'
+import type {
+  ChatChannel,
+  ChatChannelSummary,
+  ChatDevice,
+  ChatMessage,
+  ChatTombstone
+} from '../shared/chat'
 import { SkillError } from './skills'
 
 /** 单条消息正文上限；大文件应通过 git 或附件链接传递。 */
@@ -10,6 +16,16 @@ export const MAX_CHAT_BODY = 32 * 1024
 const SYNC_BATCH = 200
 /** 长轮询上限，需小于各终端单条命令的超时时间。 */
 export const MAX_WAIT_SECONDS = 900
+/** 频道最近活动超过该时长即视为闲置，由自动清理删除。 */
+export const CHAT_IDLE_MS = 8 * 60 * 60 * 1000
+/** 自动清理周期。 */
+export const CHAT_CLEANUP_INTERVAL_MS = 8 * 60 * 60 * 1000
+/** 启动后首次清理的延迟，避免与启动阶段的同步、建窗争用资源。 */
+export const CHAT_CLEANUP_DELAY_MS = 60 * 1000
+/** 删除标记保留时长；超过后清除，离线更久的设备可能重新带回旧频道。 */
+export const CHAT_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+/** 单次同步/推送携带的删除标记上限。 */
+const MAX_TOMBSTONES = 1000
 const uuid = z.string().uuid()
 export const channelIdSchema = z
   .string()
@@ -68,10 +84,24 @@ const wireMessage = z
     createdAt: z.number().int().nonnegative()
   })
   .strip()
+/** 线上传输的频道删除标记；devices 为删除时持有副本的设备，用于限定传播范围。 */
+const wireTombstone = z
+  .object({
+    id: channelIdSchema,
+    deletedAt: z.number().int().nonnegative(),
+    deletedBy: uuid,
+    devices: z.array(uuid).min(1).max(32)
+  })
+  .strip()
+/**
+ * deleted 为可选字段：旧版本对端的同步响应不含该字段仍可解析；
+ * 本机只在确有删除标记时才附带，尽量不影响只认识旧格式（strict）的对端。
+ */
 export const pushSchema = z
   .object({
     channels: z.array(wireChannel).max(1000),
-    messages: z.array(wireMessage).max(SYNC_BATCH * 2)
+    messages: z.array(wireMessage).max(SYNC_BATCH * 2),
+    deleted: z.array(wireTombstone).max(MAX_TOMBSTONES).optional()
   })
   .strict()
 /** 同步请求：频道 -> 来源设备 -> 已连续持有的最大计数。 */
@@ -91,6 +121,12 @@ interface ChannelRow {
   createdBy: string
   createdAt: number
   updatedAt: number
+}
+interface TombstoneRow {
+  id: string
+  deletedAt: number
+  deletedBy: string
+  devices: string
 }
 interface MessageRow {
   seq: number
@@ -117,6 +153,11 @@ interface Options {
   changed?: () => void
   /** 本机写入后立即推送给频道内其他设备；失败由周期同步补齐。 */
   push?: (devices: string[], payload: ChatPush) => void
+  /** 闲置阈值、清理周期、首次清理延迟与删除标记保留时长，测试时可缩短。 */
+  idleMs?: number
+  cleanupIntervalMs?: number
+  cleanupDelayMs?: number
+  tombstoneTtlMs?: number
 }
 export interface WaitInput {
   member: string
@@ -140,6 +181,15 @@ export class Chat {
   private readonly waiters = new Set<() => void>()
   private push?: Options['push']
   private directory: ChatDirectory
+  private readonly idleMs: number
+  private readonly cleanupIntervalMs: number
+  private readonly cleanupDelayMs: number
+  private readonly tombstoneTtlMs: number
+  /** 自动清理的首次延迟与周期定时器；close 时清除。 */
+  private cleanupTimers: {
+    delay?: ReturnType<typeof setTimeout>
+    interval?: ReturnType<typeof setInterval>
+  } = {}
 
   constructor(
     private readonly store: Store,
@@ -149,6 +199,10 @@ export class Chat {
     this.now = options.now ?? Date.now
     this.changed = options.changed ?? (() => {})
     this.push = options.push
+    this.idleMs = options.idleMs ?? CHAT_IDLE_MS
+    this.cleanupIntervalMs = options.cleanupIntervalMs ?? CHAT_CLEANUP_INTERVAL_MS
+    this.cleanupDelayMs = options.cleanupDelayMs ?? CHAT_CLEANUP_DELAY_MS
+    this.tombstoneTtlMs = options.tombstoneTtlMs ?? CHAT_TOMBSTONE_TTL_MS
     this.directory = {
       list: () => {
         const self = this.localDevice()
@@ -177,6 +231,10 @@ export class Chat {
       CREATE TABLE IF NOT EXISTS chat_cursors (
         member TEXT NOT NULL, channel TEXT NOT NULL, seq INTEGER NOT NULL,
         PRIMARY KEY (member, channel)
+      );
+      CREATE TABLE IF NOT EXISTS chat_deleted_channels (
+        id TEXT PRIMARY KEY, deletedAt INTEGER NOT NULL, deletedBy TEXT NOT NULL,
+        devices TEXT NOT NULL
       );
     `)
   }
@@ -227,7 +285,9 @@ export class Chat {
       if (!id) throw new SkillError(400, `未找到已配对设备：${value}`)
       devices.add(id)
     }
-    const now = this.now()
+    // 频道曾被删除时，新建时间必须晚于删除时间，否则会被各设备的删除标记再次过滤。
+    const tombstone = this.tombstone(data.id)
+    const now = Math.max(this.now(), tombstone ? tombstone.deletedAt + 1 : 0)
     const existing = this.channel(data.id)
     const channel = this.merge({
       id: data.id,
@@ -244,6 +304,102 @@ export class Chat {
     return channel
   }
 
+  /**
+   * 删除频道：本机立即删除频道、消息与游标，并写入删除标记推送给其他持有副本的设备。
+   * 删除标记会随同步传播，离线设备上线后同样删除；之后旧副本的推送不会让频道复活。
+   */
+  deleteChannel(id: string): ChatTombstone {
+    channelIdSchema.parse(id)
+    const tombstone = this.store.db.transaction(() => {
+      const channel = this.channel(id)
+      if (!channel) throw new SkillError(404, '频道不存在')
+      const latest = (
+        this.store.db
+          .prepare('SELECT MAX(createdAt) AS latest FROM chat_messages WHERE channel=?')
+          .get(id) as { latest: number | null }
+      ).latest
+      // 删除时间取本机时间与频道内所有时间戳的最大值：对端时钟偏快时，
+      // 其写入的频道/消息时间仍不晚于删除时间，保证在所有设备上都被覆盖。
+      const deletedAt = Math.max(this.now(), channel.createdAt, channel.updatedAt, latest ?? 0)
+      const value: ChatTombstone = {
+        id,
+        deletedAt,
+        deletedBy: this.localDevice().id,
+        devices: channel.devices
+      }
+      this.saveTombstone(value)
+      this.purge(id)
+      return value
+    })()
+    this.notify()
+    this.pushTombstone(tombstone)
+    return tombstone
+  }
+
+  /** 读取频道删除标记；不存在时返回 null。 */
+  tombstone(id: string): ChatTombstone | null {
+    const row = this.store.db.prepare('SELECT * FROM chat_deleted_channels WHERE id=?').get(id) as
+      | TombstoneRow
+      | undefined
+    return row ? tombstoneFromRow(row) : null
+  }
+
+  /**
+   * 闲置清理：最近活动（最后一条消息时间与频道更新时间取较大者）早于 now - idleMs 的频道被删除，
+   * 同时清除超过保留期的删除标记。各设备按同一规则独立执行，删除经删除标记传播。
+   * 返回本次删除的频道 ID。
+   */
+  cleanup(): string[] {
+    const now = this.now()
+    const rows = this.store.db
+      .prepare(
+        `SELECT c.id, MAX(c.updatedAt, COALESCE(MAX(m.createdAt), 0)) AS active
+         FROM chat_channels c LEFT JOIN chat_messages m ON m.channel = c.id
+         GROUP BY c.id`
+      )
+      .all() as { id: string; active: number }[]
+    const removed: string[] = []
+    for (const row of rows) {
+      if (now - row.active <= this.idleMs) continue
+      try {
+        this.deleteChannel(row.id)
+        removed.push(row.id)
+      } catch {
+        /* 并发删除等情况下跳过该频道，下一轮再处理。 */
+      }
+    }
+    this.store.db
+      .prepare('DELETE FROM chat_deleted_channels WHERE deletedAt < ?')
+      .run(now - this.tombstoneTtlMs)
+    return removed
+  }
+
+  /** 启动自动清理：延迟 cleanupDelayMs 执行一次，之后每 cleanupIntervalMs 执行一次；重复调用无副作用。 */
+  startCleanup(): void {
+    if (this.cleanupTimers.delay || this.cleanupTimers.interval) return
+    const run = () => {
+      try {
+        this.cleanup()
+      } catch (error) {
+        console.warn('对话频道自动清理失败:', String(error))
+      }
+    }
+    this.cleanupTimers.delay = setTimeout(() => {
+      this.cleanupTimers.delay = undefined
+      run()
+      this.cleanupTimers.interval = setInterval(run, this.cleanupIntervalMs)
+      this.cleanupTimers.interval.unref?.()
+    }, this.cleanupDelayMs)
+    this.cleanupTimers.delay.unref?.()
+  }
+
+  /** 停止自动清理定时器。 */
+  stopCleanup(): void {
+    clearTimeout(this.cleanupTimers.delay)
+    clearInterval(this.cleanupTimers.interval)
+    this.cleanupTimers = {}
+  }
+
   /** 本机写入一条消息并立即推送；clientId 相同则返回已存在的消息。 */
   post(input: z.input<typeof postSchema>): ChatMessage {
     const data = postSchema.parse(input)
@@ -251,6 +407,8 @@ export class Chat {
     const message = this.store.db.transaction(() => {
       const channel = this.channel(data.channel)
       if (!channel) throw new SkillError(404, '频道不存在，请先创建')
+      // 本机时钟落后于删除时间时，新消息会被各设备当作删除前的旧消息过滤，这里抬高到删除时间之后。
+      const tombstone = this.tombstone(data.channel)
       if (data.clientId) {
         const existing = this.store.db
           .prepare('SELECT * FROM chat_messages WHERE channel=? AND origin=? AND clientId=?')
@@ -263,7 +421,7 @@ export class Chat {
             .prepare('SELECT MAX(counter) AS max FROM chat_messages WHERE channel=? AND origin=?')
             .get(data.channel, origin) as { max: number | null }
         ).max ?? 0
-      const now = this.now()
+      const now = Math.max(this.now(), tombstone ? tombstone.deletedAt + 1 : 0)
       const row = this.insert({
         channel: data.channel,
         origin,
@@ -402,7 +560,13 @@ export class Chat {
         }
       }
     }
-    return { channels: channels.map(wireChannelOf), messages, more }
+    const deleted = this.tombstonesFor(deviceId)
+    return {
+      channels: channels.map(wireChannelOf),
+      messages,
+      more,
+      ...(deleted.length ? { deleted } : {})
+    }
   }
 
   /**
@@ -415,8 +579,15 @@ export class Chat {
     let inserted = 0
     let channelsChanged = false
     this.store.db.transaction(() => {
+      // 先处理删除标记：同一批中重建的频道定义与新消息排在其后，不会被误删。
+      for (const tombstone of payload.deleted ?? []) {
+        if (!tombstone.devices.includes(self) || !tombstone.devices.includes(deviceId)) continue
+        if (this.applyTombstone(tombstone, deviceId)) channelsChanged = true
+      }
       for (const definition of payload.channels) {
         if (!definition.devices.includes(self) || !definition.devices.includes(deviceId)) continue
+        // 删除之前创建的频道定义来自旧副本，忽略以免复活。
+        if (this.deletedBefore(definition.id, definition.createdAt)) continue
         const before = this.channel(definition.id)
         const after = this.merge(definition)
         if (!before || JSON.stringify(before) !== JSON.stringify(after)) channelsChanged = true
@@ -426,7 +597,8 @@ export class Chat {
         if (
           !channel ||
           !channel.devices.includes(deviceId) ||
-          !channel.devices.includes(message.origin)
+          !channel.devices.includes(message.origin) ||
+          this.deletedBefore(message.channel, message.createdAt)
         )
           continue
         if (this.insert(message)) {
@@ -435,14 +607,80 @@ export class Chat {
         }
       }
     })()
-    if (inserted) this.notify()
-    else if (channelsChanged) this.changed()
+    if (inserted || channelsChanged) this.notify()
     return inserted
   }
 
-  /** 关闭时唤醒所有长轮询，避免请求挂到超时。 */
+  /** 关闭时停止自动清理并唤醒所有长轮询，避免请求挂到超时。 */
   close(): void {
+    this.stopCleanup()
     for (const waiter of [...this.waiters]) waiter()
+  }
+
+  /** 时间戳不晚于该频道删除时间时返回 true，表示属于已删除的旧副本。 */
+  private deletedBefore(channel: string, createdAt: number): boolean {
+    const tombstone = this.tombstone(channel)
+    return !!tombstone && createdAt <= tombstone.deletedAt
+  }
+
+  /**
+   * 合并删除标记：删除时间取较大值、设备取并集。本机副本创建时间不晚于删除时间、
+   * 且发送方确实持有该频道时删除本机副本；删除后重建的新频道（创建时间更晚）保留。
+   * 返回是否删除了本机频道。
+   */
+  private applyTombstone(incoming: ChatTombstone, deviceId: string): boolean {
+    const current = this.tombstone(incoming.id)
+    const merged: ChatTombstone =
+      current && current.deletedAt >= incoming.deletedAt
+        ? { ...current, devices: union(current.devices, incoming.devices) }
+        : { ...incoming, devices: union(current?.devices ?? [], incoming.devices) }
+    this.saveTombstone(merged)
+    const channel = this.channel(incoming.id)
+    if (!channel || !channel.devices.includes(deviceId)) return false
+    if (channel.createdAt > merged.deletedAt) return false
+    this.purge(incoming.id)
+    return true
+  }
+
+  private saveTombstone(tombstone: ChatTombstone): void {
+    this.store.db
+      .prepare('INSERT OR REPLACE INTO chat_deleted_channels VALUES(?,?,?,?)')
+      .run(
+        tombstone.id,
+        tombstone.deletedAt,
+        tombstone.deletedBy,
+        JSON.stringify(tombstone.devices)
+      )
+  }
+
+  /** 删除本机频道副本：频道定义、全部消息与各参与者游标。 */
+  private purge(id: string): void {
+    this.store.db.prepare('DELETE FROM chat_messages WHERE channel=?').run(id)
+    this.store.db.prepare('DELETE FROM chat_cursors WHERE channel=?').run(id)
+    this.store.db.prepare('DELETE FROM chat_channels WHERE id=?').run(id)
+  }
+
+  /** 发给指定设备的删除标记：只包含删除时该设备持有副本的频道，按时间倒序截断。 */
+  private tombstonesFor(deviceId: string): ChatTombstone[] {
+    return (
+      this.store.db
+        .prepare('SELECT * FROM chat_deleted_channels ORDER BY deletedAt DESC')
+        .all() as TombstoneRow[]
+    )
+      .map(tombstoneFromRow)
+      .filter((tombstone) => tombstone.devices.includes(deviceId))
+      .slice(0, MAX_TOMBSTONES)
+  }
+
+  private pushTombstone(tombstone: ChatTombstone): void {
+    const self = this.localDevice().id
+    const targets = tombstone.devices.filter((id) => id !== self)
+    if (!targets.length || !this.push) return
+    try {
+      this.push(targets, { channels: [], messages: [], deleted: [tombstone] })
+    } catch {
+      /* 推送失败由周期同步补齐。 */
+    }
   }
 
   private resolveChannels(member: string, channels: string[]): string[] {
@@ -551,7 +789,13 @@ export class Chat {
     const targets = channel.devices.filter((id) => id !== self)
     if (!targets.length || !this.push) return
     try {
-      this.push(targets, { channels: [wireChannelOf(channel)], messages: messages.map(wireOf) })
+      // 重建过的频道附带删除标记，让仍持有旧副本的设备先删除旧副本再接收新频道。
+      const tombstone = this.tombstone(channel.id)
+      this.push(targets, {
+        channels: [wireChannelOf(channel)],
+        messages: messages.map(wireOf),
+        ...(tombstone ? { deleted: [tombstone] } : {})
+      })
     } catch {
       /* 推送失败不影响本机写入，周期同步会补齐。 */
     }
@@ -578,6 +822,14 @@ function channelFromRow(row: ChannelRow): ChatChannel {
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
+  }
+}
+function tombstoneFromRow(row: TombstoneRow): ChatTombstone {
+  return {
+    id: row.id,
+    deletedAt: row.deletedAt,
+    deletedBy: row.deletedBy,
+    devices: JSON.parse(row.devices)
   }
 }
 function wireChannelOf(channel: ChatChannel): ChatPush['channels'][number] {

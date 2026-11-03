@@ -332,6 +332,7 @@ function installIpc(): void {
     lan.cancelLocalCommand(z.string().uuid().parse(command))
   )
   handle('chat-history', (channel: unknown) => lan.chat.history(z.string().parse(channel)))
+  handle('chat-delete', (channel: unknown) => lan.chat.deleteChannel(z.string().parse(channel)))
   handle('snapshot', snapshot)
   handle('skill-detail', (id: unknown) => skills.detail(z.string().parse(id)))
   handle(
@@ -535,6 +536,8 @@ async function boot(): Promise<void> {
     }
   })
   await lan.initialize()
+  // 对话频道闲置自动清理：启动后稍后执行一次，之后每 8 小时一次；lan.close 时停止。
+  lan.chat.startCleanup()
   nativeTheme.themeSource = store.settings().theme
   protocol.handle('ebisu-asset', async (request) => {
     const url = new URL(request.url)

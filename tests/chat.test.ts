@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { Store } from '../src/main/database'
-import { Chat } from '../src/main/chat'
+import { Chat, CHAT_IDLE_MS, CHAT_TOMBSTONE_TTL_MS, type ChatPush } from '../src/main/chat'
 import { startServer } from '../src/main/server'
 
 let root: string
@@ -334,7 +334,225 @@ it('chat 客户端：派单、认领竞争、回复、完成标记、绑定会�
     expect((await run(['send', ...as('main'), '--channel', 'bug/S-1'])).out.reason).toBe(
       'missing --to'
     )
+    // 对话完成后删除频道；再次删除返回 ok:false
+    const deleted = await run(['delete', ...as('main'), '--channel', 'bug/S-1'])
+    expect(deleted.code).toBe(0)
+    expect(deleted.out).toMatchObject({
+      ok: true,
+      deleted: { id: 'bug/S-1', devices: [device.id] }
+    })
+    expect((await run(['channels', ...as('main')])).out.channels).toEqual([])
+    const again = await run(['delete', ...as('main'), '--channel', 'bug/S-1'])
+    expect(again.code).toBe(1)
+    expect(again.out).toMatchObject({ ok: false, reason: '频道不存在' })
   } finally {
     await server.close()
   }
 }, 30000)
+
+it('本机删除频道：清除频道、消息与游标，写入删除标记并推送', async () => {
+  const pushes: { devices: string[]; payload: ChatPush }[] = []
+  const peer = randomUUID()
+  chat.attach(
+    {
+      list: () => [],
+      resolve: (value) => (value === peer ? peer : value === device.id ? device.id : null)
+    },
+    (devices, payload) => pushes.push({ devices, payload })
+  )
+  chat.createChannel({ id: 'bug/S-2', devices: [peer] })
+  chat.createChannel({ id: 'keep' })
+  chat.post({ channel: 'bug/S-2', from: 'main', to: 'w', body: 'task' })
+  expect(await chat.wait({ member: 'w', channels: ['bug/S-2'], timeout: 0 })).toHaveLength(1)
+  const count = (sql: string) => (store.db.prepare(sql).get('bug/S-2') as { n: number }).n
+  expect(count('SELECT COUNT(*) AS n FROM chat_cursors WHERE channel=?')).toBe(1)
+  pushes.length = 0
+  const tombstone = chat.deleteChannel('bug/S-2')
+  expect(tombstone).toMatchObject({ id: 'bug/S-2', deletedBy: device.id })
+  expect(tombstone.devices.sort()).toEqual([device.id, peer].sort())
+  expect(chat.channel('bug/S-2')).toBeNull()
+  expect(chat.history('bug/S-2')).toEqual([])
+  expect(count('SELECT COUNT(*) AS n FROM chat_messages WHERE channel=?')).toBe(0)
+  expect(count('SELECT COUNT(*) AS n FROM chat_cursors WHERE channel=?')).toBe(0)
+  expect(chat.channel('keep')).not.toBeNull()
+  expect(chat.tombstone('bug/S-2')).toEqual(tombstone)
+  // 删除标记只推送给其他持有副本的设备
+  expect(pushes).toEqual([
+    { devices: [peer], payload: { channels: [], messages: [], deleted: [tombstone] } }
+  ])
+  // 同步应答携带删除标记，无关设备收不到
+  expect(chat.answerSync(peer, { channels: {} }).deleted).toEqual([tombstone])
+  expect(chat.answerSync(randomUUID(), { channels: {} }).deleted).toBeUndefined()
+  expect(() => chat.deleteChannel('bug/S-2')).toThrow('频道不存在')
+})
+
+/** 两台设备互相直推的复制环境；offline 时 A→B 的推送被丢弃，只能靠同步补齐。 */
+function pair() {
+  const a = { id: randomUUID(), name: 'mac-a', protocol: 1 }
+  const b = { id: randomUUID(), name: 'mac-b', protocol: 1 }
+  const state = { clock: 1_000_000, offline: false }
+  const now = () => state.clock
+  const storeB = new Store(path.join(root, 'b.sqlite'))
+  const chatA = new Chat(store, () => a, { now })
+  const chatB = new Chat(storeB, () => b, { now })
+  const directory = {
+    list: () => [],
+    resolve: (value: string) => [a.id, b.id].find((id) => id === value) ?? null
+  }
+  const copy = (payload: ChatPush) => JSON.parse(JSON.stringify(payload))
+  chatA.attach(directory, (_devices, payload) => {
+    if (!state.offline) chatB.ingest(a.id, copy(payload))
+  })
+  chatB.attach(directory, (_devices, payload) => {
+    if (!state.offline) chatA.ingest(b.id, copy(payload))
+  })
+  /** 与 lan.ts 的 syncChat 一致：to 向 from 拉取一次，去掉应答中的 more 后写入。 */
+  const pull = (to: Chat, toId: string, from: Chat, fromId: string) => {
+    const { more: _more, ...answer } = from.answerSync(toId, to.syncRequest(fromId))
+    return to.ingest(fromId, copy(answer))
+  }
+  /** 模拟一轮双向同步（各自向对方拉取）。 */
+  const sync = () => {
+    pull(chatA, a.id, chatB, b.id)
+    pull(chatB, b.id, chatA, a.id)
+  }
+  const close = () => {
+    chatA.close()
+    chatB.close()
+    storeB.close()
+  }
+  return { a, b, chatA, chatB, state, pull, sync, close }
+}
+
+it('删除标记传播到对端；离线对端的旧副本推送不会复活频道，上线同步后收敛', () => {
+  const { a, b, chatA, chatB, state, pull, sync, close } = pair()
+  try {
+    chatA.createChannel({ id: 'control', devices: [b.id] })
+    chatA.post({ channel: 'control', from: 'a/main', to: 'b/w', body: 'one' })
+    expect(chatB.history('control').map((m) => m.body)).toEqual(['one'])
+    // 在线：删除立即传播
+    chatA.deleteChannel('control')
+    expect(chatB.channel('control')).toBeNull()
+    expect(chatB.history('control')).toEqual([])
+    expect(chatB.tombstone('control')?.deletedBy).toBe(a.id)
+
+    // 离线：B 没收到删除，继续写入并推送旧副本
+    state.clock += 1000
+    chatA.createChannel({ id: 'bug/S-3', devices: [b.id] })
+    chatA.post({ channel: 'bug/S-3', from: 'a/main', body: 'old' })
+    state.offline = true
+    state.clock += 1000
+    chatA.deleteChannel('bug/S-3')
+    expect(chatB.channel('bug/S-3')).not.toBeNull()
+    state.offline = false
+    state.clock += 1000
+    chatB.post({ channel: 'bug/S-3', from: 'b/w', body: 'late' })
+    expect(chatA.channel('bug/S-3')).toBeNull()
+    // A 先向 B 拉取：旧频道定义与消息都被忽略；B 再向 A 拉取时收到删除标记
+    pull(chatA, a.id, chatB, b.id)
+    expect(chatA.channel('bug/S-3')).toBeNull()
+    sync()
+    expect(chatB.channel('bug/S-3')).toBeNull()
+    expect(chatB.history('bug/S-3')).toEqual([])
+    expect(chatA.channel('bug/S-3')).toBeNull()
+    expect(chatA.tombstone('bug/S-3')?.devices.sort()).toEqual([a.id, b.id].sort())
+  } finally {
+    close()
+  }
+})
+
+it('删除后可重建同名频道；仍持有旧副本的对端先删旧副本再接收新频道', () => {
+  const { a, b, chatA, chatB, state, pull, sync, close } = pair()
+  try {
+    chatA.createChannel({ id: 'control', devices: [b.id] })
+    chatA.post({ channel: 'control', from: 'a/main', body: 'old-1' })
+    chatA.post({ channel: 'control', from: 'a/main', body: 'old-2' })
+    state.offline = true
+    const tombstone = chatA.deleteChannel('control')
+    // 同一毫秒内重建：创建时间被抬到删除时间之后
+    const recreated = chatA.createChannel({ id: 'control', devices: [b.id] })
+    expect(recreated.createdAt).toBeGreaterThan(tombstone.deletedAt)
+    const fresh = chatA.post({ channel: 'control', from: 'a/main', body: 'new-1' })
+    expect(fresh.counter).toBe(1)
+    expect(fresh.createdAt).toBeGreaterThan(tombstone.deletedAt)
+    expect(chatB.history('control').map((m) => m.body)).toEqual(['old-1', 'old-2'])
+    // B 的旧副本推送/同步不会把旧消息带回重建后的频道
+    pull(chatA, a.id, chatB, b.id)
+    expect(chatA.history('control').map((m) => m.body)).toEqual(['new-1'])
+    expect(chatA.channel('control')!.createdAt).toBe(recreated.createdAt)
+    // 恢复在线：A 的新消息推送附带删除标记，B 删除旧副本后接收新频道
+    state.offline = false
+    chatA.post({ channel: 'control', from: 'a/main', body: 'new-2' })
+    expect(chatB.history('control').map((m) => m.body)).toEqual(['new-2'])
+    expect(chatB.channel('control')!.createdAt).toBe(recreated.createdAt)
+    // 离线期间的 new-1 由同步补齐；A 收到 B 回传的删除标记也不会删掉重建后的频道
+    sync()
+    const bodies = (target: Chat) =>
+      target
+        .history('control')
+        .map((m) => m.body)
+        .sort()
+    expect(bodies(chatA)).toEqual(['new-1', 'new-2'])
+    expect(bodies(chatB)).toEqual(['new-1', 'new-2'])
+  } finally {
+    close()
+  }
+})
+
+it('自动清理只删除闲置超过 8 小时的频道，并清除过期删除标记', () => {
+  let clock = 0
+  const local = new Chat(store, () => device, { now: () => clock })
+  try {
+    local.createChannel({ id: 'old' })
+    local.post({ channel: 'old', from: 'main', body: 'x' })
+    local.createChannel({ id: 'empty-old' })
+    clock = 2 * 60 * 60 * 1000
+    local.createChannel({ id: 'fresh-empty' })
+    local.createChannel({ id: 'active' })
+    clock = CHAT_IDLE_MS
+    local.post({ channel: 'active', from: 'main', body: 'still working' })
+    // 恰好 8 小时不删除，超过才删除
+    expect(local.cleanup()).toEqual([])
+    clock = CHAT_IDLE_MS + 1
+    expect(local.cleanup().sort()).toEqual(['empty-old', 'old'])
+    expect(
+      local
+        .summaries()
+        .map((c) => c.id)
+        .sort()
+    ).toEqual(['active', 'fresh-empty'])
+    expect(local.tombstone('old')).not.toBeNull()
+    clock = CHAT_IDLE_MS + 1 + CHAT_TOMBSTONE_TTL_MS + 1
+    local.cleanup()
+    expect(local.tombstone('old')).toBeNull()
+    expect(local.summaries()).toEqual([])
+  } finally {
+    local.close()
+  }
+})
+
+it('自动清理定时器：启动后延迟执行一次，之后按周期执行，close 后停止', () => {
+  vi.useFakeTimers()
+  const local = new Chat(store, () => device, {
+    cleanupDelayMs: 1000,
+    cleanupIntervalMs: 5000
+  })
+  try {
+    const cleanup = vi.spyOn(local, 'cleanup')
+    local.startCleanup()
+    local.startCleanup()
+    vi.advanceTimersByTime(999)
+    expect(cleanup).toHaveBeenCalledTimes(0)
+    vi.advanceTimersByTime(1)
+    expect(cleanup).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(10000)
+    expect(cleanup).toHaveBeenCalledTimes(3)
+    local.close()
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(60000)
+    expect(cleanup).toHaveBeenCalledTimes(3)
+  } finally {
+    local.close()
+    vi.useRealTimers()
+  }
+})

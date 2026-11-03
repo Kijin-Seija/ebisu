@@ -19,6 +19,7 @@ const api: EbisuApi = {
     ipcRenderer.invoke('ebisu:cancel-remote-command', device, command),
   cancelLocalCommand: (command) => ipcRenderer.invoke('ebisu:cancel-local-command', command),
   chatHistory: (channel) => ipcRenderer.invoke('ebisu:chat-history', channel),
+  deleteChat: (channel) => ipcRenderer.invoke('ebisu:chat-delete', channel),
   skillDetail: (id) => ipcRenderer.invoke('ebisu:skill-detail', id),
   skillFilePath: (id, relative) => ipcRenderer.invoke('ebisu:skill-file-path', id, relative),
   revealSkillFile: (id, relative) => ipcRenderer.invoke('ebisu:reveal-skill-file', id, relative),

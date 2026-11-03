@@ -1043,7 +1043,12 @@ export class Lan {
         )
         if (!this.enabled || this.peers.get(peer.device.id) !== peer) return
         const body = response.body as ChatPush & { more?: boolean }
-        this.chat.ingest(peer.device.id, { channels: body.channels, messages: body.messages })
+        // 旧版本对端的响应没有 deleted 字段，只转发存在的字段。
+        this.chat.ingest(peer.device.id, {
+          channels: body.channels,
+          messages: body.messages,
+          ...(body.deleted ? { deleted: body.deleted } : {})
+        })
         if (!body.more) return
       }
     } catch {

@@ -36,6 +36,15 @@ export interface ChatMessage {
   /** 本机收到时间。 */
   receivedAt: number
 }
+/** 频道删除标记：跨设备复制，阻止旧副本让已删除频道复活；创建时间晚于删除时间的频道视为重建。 */
+export interface ChatTombstone {
+  id: string
+  deletedAt: number
+  /** 执行删除的设备 ID。 */
+  deletedBy: string
+  /** 删除时持有副本的设备，删除标记只传播给这些设备。 */
+  devices: string[]
+}
 export interface ChatChannelSummary extends ChatChannel {
   count: number
   last: ChatMessage | null

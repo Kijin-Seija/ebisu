@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { NButton, NInput, NSelect, NTag, useMessage } from 'naive-ui'
+import { NButton, NInput, NSelect, NTag, useDialog, useMessage } from 'naive-ui'
 import { ListTodo, MessagesSquare, Plus, Send } from 'lucide-vue-next'
 import { useDashboard } from '../store'
 import type { RemoteCommand, RemoteCommandTerminal, RemoteDevice } from '../../../shared/lan'
@@ -17,6 +17,7 @@ interface TaskRecord {
 const dashboard = useDashboard()
 const api = window.ebisu
 const message = useMessage()
+const dialog = useDialog()
 const tab = ref<'running' | 'chats' | 'create'>('running')
 /** 当前打开的对话：Agent 频道或单条远程任务。 */
 const selected = ref<{ kind: 'chat' | 'command'; id: string } | null>(null)
@@ -260,6 +261,26 @@ async function watchTask(item: TaskRecord) {
     }
   }
 }
+/** 删除 Agent 对话频道；确认后本机与其他持有副本的设备都会删除。 */
+function removeChat(chat: ChatChannelSummary) {
+  dialog.warning({
+    title: '删除对话频道',
+    content: `删除「${chat.title}」及其全部消息？其他参与设备上的副本也会一并删除，且无法恢复。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await api.deleteChat(chat.id)
+        if (selected.value?.kind === 'chat' && selected.value.id === chat.id) selected.value = null
+        message.success('已删除频道')
+      } catch (error) {
+        message.error(String(error), { duration: 6000 })
+      } finally {
+        await dashboard.refresh()
+      }
+    }
+  })
+}
 async function cancel(item: TaskRecord) {
   try {
     item.command = item.outgoing
@@ -392,9 +413,14 @@ async function cancel(item: TaskRecord) {
                 {{ chat.members.join('、') || '暂无参与者' }}
               </p>
             </div>
-            <span class="section-meta">{{
-              shortTime(chat.last?.createdAt ?? chat.updatedAt)
-            }}</span>
+            <div class="chat-card-actions">
+              <span class="section-meta">{{
+                shortTime(chat.last?.createdAt ?? chat.updatedAt)
+              }}</span>
+              <n-button size="small" secondary type="error" @click.stop="removeChat(chat)"
+                >删除</n-button
+              >
+            </div>
           </div>
           <p v-if="chat.last" class="remote-task-prompt chat-preview">
             <strong>{{ chat.last.from }}：</strong>{{ chat.last.body }}
