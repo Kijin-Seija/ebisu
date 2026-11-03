@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   darkTheme,
   lightTheme,
@@ -17,6 +17,7 @@ import {
   LayoutGrid,
   BookOpen,
   SlidersHorizontal,
+  ListTodo,
   Plus,
   RefreshCw,
   ArrowUpRight
@@ -27,11 +28,12 @@ import DeviceFilter from './components/DeviceFilter.vue'
 import LanPairDialog from './components/LanPairDialog.vue'
 import Settings from './components/Settings.vue'
 import Skills from './components/Skills.vue'
+import RemoteTasks from './components/RemoteTasks.vue'
 import StoneMark from './components/StoneMark.vue'
 
 const dashboard = useDashboard()
 const api = window.ebisu
-const page = ref<'projects' | 'skills' | 'settings'>('projects')
+const page = ref<'projects' | 'skills' | 'remote-tasks' | 'settings'>('projects')
 const trayMode = new URLSearchParams(location.search).has('tray')
 const systemDark = ref(matchMedia('(prefers-color-scheme: dark)').matches)
 const query = matchMedia('(prefers-color-scheme: dark)')
@@ -44,6 +46,10 @@ const dark = computed(
     (dashboard.snapshot?.settings.theme !== 'light' && systemDark.value)
 )
 const folders = computed(() => dashboard.views.folders)
+const remoteTasksEnabled = computed(() => dashboard.snapshot?.lan?.remoteExecution === true)
+watch(remoteTasksEnabled, (enabled) => {
+  if (!enabled && page.value === 'remote-tasks') page.value = 'settings'
+})
 let unsubscribe: (() => void) | undefined
 onMounted(() => {
   void dashboard.refresh()
@@ -138,6 +144,13 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
                   dashboard.views.skills.length
                 }}</span>
               </button>
+              <button
+                v-if="remoteTasksEnabled"
+                :class="{ active: page === 'remote-tasks' }"
+                @click="page = 'remote-tasks'"
+              >
+                <ListTodo :size="18" />远程任务
+              </button>
               <button :class="{ active: page === 'settings' }" @click="page = 'settings'">
                 <SlidersHorizontal :size="18" />设置
               </button>
@@ -188,6 +201,9 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
                 </template>
                 <template v-else-if="page === 'skills'">
                   <Skills :tray-mode="trayMode" />
+                </template>
+                <template v-else-if="page === 'remote-tasks' && remoteTasksEnabled">
+                  <RemoteTasks />
                 </template>
                 <template v-else>
                   <div v-if="!trayMode" class="page-heading settings-heading">
