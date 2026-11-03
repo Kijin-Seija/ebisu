@@ -94,6 +94,8 @@ export interface IntegrationView {
 export interface Settings {
   theme: 'system' | 'light' | 'dark'
   avatars: Partial<Record<AvatarKey, string>>
+  /** 已配对设备是否可以在本机自动启动远程 Agent 任务。默认关闭。 */
+  remoteExecution?: boolean
 }
 export interface Snapshot {
   lan?: import('./lan').LanView

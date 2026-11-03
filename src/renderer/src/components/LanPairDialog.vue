@@ -23,7 +23,7 @@ async function present(requests: PairRequestView[]) {
     await new Promise<void>((resolve) => {
       dialog.create({
         title: '局域网配对请求',
-        content: `是否接受来自「${next.device.name}」的邀请？`,
+        content: `是否接受来自「${next.device.name}」的邀请？配对后，在本机开启远程 Agent 执行时，该设备可以在本机绝对路径自动启动任务。`,
         positiveText: '接受',
         negativeText: '拒绝',
         closable: false,

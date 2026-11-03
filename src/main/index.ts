@@ -279,6 +279,13 @@ function installIpc(): void {
   handle('configure-lan', (enabled: unknown, name: unknown) =>
     lan.configure(z.boolean().parse(enabled), z.string().parse(name))
   )
+  handle('configure-remote-execution', (enabled: unknown) => {
+    const value = z.boolean().parse(enabled)
+    return lan.configureRemoteExecution(value).then(() => {
+      store.saveSettings({ ...store.settings(), remoteExecution: value })
+      changed()
+    })
+  })
   handle('request-pair', (device: unknown) => lan.requestPair(z.string().uuid().parse(device)))
   handle('respond-pair', (request: unknown, accept: unknown) =>
     lan.respondPair(z.string().uuid().parse(request), z.boolean().parse(accept))
@@ -301,6 +308,29 @@ function installIpc(): void {
     changed()
     return id
   })
+  handle('remote-command', (device: unknown, input: unknown) =>
+    lan.remoteCommand(
+      z.string().uuid().parse(device),
+      z
+        .object({
+          requestId: z.string().uuid(),
+          terminal: z.enum(['codex', 'claude', 'dsh', 'qoder']),
+          path: z.string(),
+          prompt: z.string()
+        })
+        .strict()
+        .parse(input)
+    )
+  )
+  handle('remote-command-status', (device: unknown, command: unknown) =>
+    lan.remoteCommandStatus(z.string().uuid().parse(device), z.string().uuid().parse(command))
+  )
+  handle('cancel-remote-command', (device: unknown, command: unknown) =>
+    lan.cancelRemoteCommand(z.string().uuid().parse(device), z.string().uuid().parse(command))
+  )
+  handle('cancel-local-command', (command: unknown) =>
+    lan.cancelLocalCommand(z.string().uuid().parse(command))
+  )
   handle('snapshot', snapshot)
   handle('skill-detail', (id: unknown) => skills.detail(z.string().parse(id)))
   handle(

@@ -1593,6 +1593,33 @@ button:focus-visible {
   color: #c26746;
   overflow-wrap: anywhere;
 }
+.lan-remote-execution {
+  margin: 18px 0 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+.lan-warning {
+  color: #c26746;
+}
+.lan-command-form {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.lan-command-list {
+  display: grid;
+  gap: 8px;
+}
+.lan-command-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
 .lan-device-list {
   margin-top: 20px;
 }

@@ -13,6 +13,8 @@ import type {
   DeviceIdentity,
   LanView,
   PairOutcome,
+  RemoteCommand,
+  RemoteCommandRequest,
   SharedSnapshot,
   SkillExport
 } from '../shared/lan'
@@ -20,6 +22,7 @@ import { activityPhases, terminalIds } from '../shared/types'
 import { packageSchema, SkillError, type Skills } from './skills'
 import type { Store } from './database'
 import { SkillTransfer, packageHash } from './skill-transfer'
+import { RemoteCommands, isRemoteCommandTerminal } from './remote-commands'
 
 const PROTOCOL = 1
 const MAX_BODY = 12 * 1024 * 1024
@@ -169,6 +172,7 @@ interface Options {
 /** LAN 服务只发布本机白名单 DTO；缓存永远不能进入本机目录、租约或安装业务表。 */
 export class Lan {
   readonly transfer: SkillTransfer
+  readonly commands: RemoteCommands
   private identity!: Identity
   private enabled = false
   private server?: Server
@@ -204,6 +208,10 @@ export class Lan {
   ) {
     this.now = options.now ?? Date.now
     this.transfer = new SkillTransfer(store, skills, this.now)
+    this.commands = new RemoteCommands(store, () => this.device(), {
+      now: this.now,
+      changed: options.changed
+    })
     store.db.exec(`CREATE TABLE IF NOT EXISTS lan_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS lan_peers(id TEXT PRIMARY KEY,value TEXT NOT NULL);`)
     for (const row of store.db.prepare('SELECT id,value FROM lan_peers').all() as {
@@ -301,7 +309,9 @@ export class Lan {
         lastSeen: peer.lastSeen,
         error: peer.error,
         snapshot: peer.snapshot
-      }))
+      })),
+      remoteExecution: this.commands.enabled(),
+      commands: this.commands.list()
     }
   }
   configure(enabled: boolean, name: string, restart = false): Promise<void> {
@@ -466,6 +476,23 @@ export class Lan {
               (item) => item.fingerprint === remoteFingerprint
             )
             if (!peer) throw new SkillError(401, '设备未配对或已撤销')
+            if (req.method === 'POST' && url === '/lan/v1/commands') {
+              const command = await this.commands.create(
+                peer.device,
+                (await readJson(96 * 1024)) as RemoteCommandRequest
+              )
+              send(200, command)
+              return
+            }
+            const commandMatch = /^\/lan\/v1\/commands\/([a-f0-9-]{36})(?:\/(cancel))?$/.exec(url)
+            if (commandMatch && (req.method === 'GET' || req.method === 'POST')) {
+              const command = commandMatch[2]
+                ? this.commands.cancelForSource(commandMatch[1], peer.device.id)
+                : this.commands.getForSource(commandMatch[1], peer.device.id)
+              if (!command) throw new SkillError(404, '任务不存在')
+              send(200, command)
+              return
+            }
             if (req.method !== 'GET') throw new SkillError(404, '接口不存在')
             if (url === '/lan/v1/snapshot') {
               const local = await this.options.snapshot()
@@ -971,6 +998,45 @@ export class Lan {
       throw new SkillError(400, '技能包校验失败')
     return exported
   }
+  async configureRemoteExecution(enabled: boolean): Promise<void> {
+    this.commands.setEnabled(enabled)
+  }
+  async remoteCommand(deviceId: string, input: RemoteCommandRequest): Promise<RemoteCommand> {
+    const peer = this.peers.get(z.string().uuid().parse(deviceId))
+    if (!this.enabled || !peer) throw new SkillError(401, '设备未连接')
+    if (!isRemoteCommandTerminal(input.terminal)) throw new SkillError(400, '终端不支持远程任务')
+    const response = await this.fetch(peer.address, peer.fingerprint, '/lan/v1/commands', {
+      ...input,
+      requestId: z.string().uuid().parse(input.requestId)
+    })
+    return response.body as RemoteCommand
+  }
+  async remoteCommandStatus(deviceId: string, commandId: string): Promise<RemoteCommand> {
+    const peer = this.peers.get(z.string().uuid().parse(deviceId))
+    if (!this.enabled || !peer) throw new SkillError(401, '设备未连接')
+    z.string().uuid().parse(commandId)
+    const response = await this.fetch(
+      peer.address,
+      peer.fingerprint,
+      `/lan/v1/commands/${commandId}`
+    )
+    return response.body as RemoteCommand
+  }
+  async cancelRemoteCommand(deviceId: string, commandId: string): Promise<RemoteCommand> {
+    const peer = this.peers.get(z.string().uuid().parse(deviceId))
+    if (!this.enabled || !peer) throw new SkillError(401, '设备未连接')
+    z.string().uuid().parse(commandId)
+    const response = await this.fetch(
+      peer.address,
+      peer.fingerprint,
+      `/lan/v1/commands/${commandId}/cancel`,
+      {}
+    )
+    return response.body as RemoteCommand
+  }
+  async cancelLocalCommand(commandId: string): Promise<RemoteCommand> {
+    return this.commands.cancel(z.string().uuid().parse(commandId))
+  }
   async prepareImport(deviceId: string, skillId: string) {
     const exported = await this.remoteSkill(deviceId, skillId)
     return this.transfer.prepare(this.peers.get(deviceId)!.device, exported)
@@ -1008,6 +1074,7 @@ export class Lan {
   async close(): Promise<void> {
     await this.configuring.catch(() => undefined)
     this.enabled = false
+    this.commands.close()
     await this.stop()
   }
 }

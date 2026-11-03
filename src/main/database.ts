@@ -379,7 +379,9 @@ export class Store {
     const row = this.db.prepare('SELECT value FROM settings WHERE key=?').get('preferences') as
       | { value: string }
       | undefined
-    return row ? JSON.parse(row.value) : { theme: 'system', avatars: {} }
+    return row
+      ? { remoteExecution: false, ...JSON.parse(row.value) }
+      : { theme: 'system', avatars: {}, remoteExecution: false }
   }
   saveSettings(settings: Settings): void {
     this.db

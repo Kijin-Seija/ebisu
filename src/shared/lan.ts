@@ -1,4 +1,4 @@
-import type { FolderView } from './types'
+import type { FolderView, TerminalId } from './types'
 import type { SkillPackage, SkillSummary } from './skills'
 
 export interface DeviceIdentity {
@@ -32,6 +32,43 @@ export interface PairRequestView {
 }
 /** 本机发起配对后的等待结果；pending 表示对方在等待期限内尚未处理。 */
 export type PairOutcome = 'paired' | 'declined' | 'pending'
+export const remoteCommandStatuses = [
+  'queued',
+  'running',
+  'waiting',
+  'completed',
+  'failed',
+  'cancelled'
+] as const
+export type RemoteCommandStatus = (typeof remoteCommandStatuses)[number]
+export type RemoteCommandTerminal = Extract<TerminalId, 'codex' | 'claude' | 'dsh' | 'qoder'>
+export interface RemoteCommandRequest {
+  requestId: string
+  terminal: RemoteCommandTerminal
+  path: string
+  prompt: string
+}
+export interface RemoteCommandResult {
+  status: Extract<RemoteCommandStatus, 'completed' | 'failed' | 'cancelled'>
+  summary: string
+  exitCode: number | null
+  output?: string
+  error?: string
+}
+export interface RemoteCommand {
+  commandId: string
+  requestId: string
+  source: DeviceIdentity
+  terminal: RemoteCommandTerminal
+  path: string
+  prompt: string
+  status: RemoteCommandStatus
+  sessionId: string | null
+  createdAt: number
+  startedAt: number | null
+  finishedAt: number | null
+  result: RemoteCommandResult | null
+}
 export interface LanView {
   enabled: boolean
   device: DeviceIdentity
@@ -41,6 +78,8 @@ export interface LanView {
   discovered: NearbyDevice[]
   requests: PairRequestView[]
   peers: RemoteDevice[]
+  remoteExecution: boolean
+  commands: RemoteCommand[]
 }
 export interface SkillExport {
   skillId: string
@@ -65,4 +104,9 @@ export interface DeviceApi {
   remoteSkill(deviceId: string, skillId: string): Promise<SkillExport>
   prepareImport(deviceId: string, skillId: string): Promise<ImportDraft>
   confirmImport(draftId: string, edit: ImportEdit): Promise<string>
+  configureRemoteExecution(enabled: boolean): Promise<void>
+  remoteCommand(deviceId: string, request: RemoteCommandRequest): Promise<RemoteCommand>
+  remoteCommandStatus(deviceId: string, commandId: string): Promise<RemoteCommand>
+  cancelRemoteCommand(deviceId: string, commandId: string): Promise<RemoteCommand>
+  cancelLocalCommand(commandId: string): Promise<RemoteCommand>
 }

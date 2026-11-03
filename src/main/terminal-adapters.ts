@@ -16,6 +16,8 @@ interface Adapter {
   /** 终端不提供可安装的生命周期 hook 时只能依赖规则与 skill 主动上报。 */
   hookSupport?: 'native' | 'none'
   events: string[]
+  /** 远程任务的非交互参数；不存在表示该终端不能由 Ebisu 自动启动。 */
+  remoteArgs?: (prompt: string) => string[]
 }
 /** 不把 Claude 桌面聊天应用误识别成 Claude Code；后者需 CLI 或其专用应用。 */
 export const adapters: Record<TerminalId, Adapter> = {
@@ -34,7 +36,8 @@ export const adapters: Record<TerminalId, Adapter> = {
       'Stop',
       'Interrupt',
       'SessionEnd'
-    ]
+    ],
+    remoteArgs: (prompt) => ['exec', '--json', prompt]
   },
   workbuddy: {
     commands: ['workbuddy'],
@@ -70,7 +73,8 @@ export const adapters: Record<TerminalId, Adapter> = {
       'Stop',
       'StopFailure',
       'SessionEnd'
-    ]
+    ],
+    remoteArgs: (prompt) => ['-p', prompt, '--output-format', 'json']
   },
   grok: {
     commands: ['grok'],
@@ -110,7 +114,8 @@ export const adapters: Record<TerminalId, Adapter> = {
       'SessionEnd',
       'Elicitation',
       'ElicitationResult'
-    ]
+    ],
+    remoteArgs: (prompt) => ['--json', prompt]
   },
   // Qoder CN 使用独立的 ~/.qoder-cn 用户目录与 Qoder CN.app，hook 形状与 Qoder 相同。
   // 桌面应用内置 CLI，不安装全局可执行文件，因此只按应用包探测。
@@ -143,7 +148,8 @@ export const adapters: Record<TerminalId, Adapter> = {
     skillRoot: '.dsh/skills',
     rule: '.dsh/AGENTS.md',
     hookSupport: 'none',
-    events: []
+    events: [],
+    remoteArgs: (prompt) => ['--json', prompt]
   },
   // Antigravity 2.x 的用户级自定义根为 ~/.gemini/config（skills/、hooks.json），
   // 全局规则沿用文档声明的 ~/.gemini/GEMINI.md。hooks.json 按钩子名分组，事件负载为 camelCase，
@@ -159,4 +165,8 @@ export const adapters: Record<TerminalId, Adapter> = {
     hookFormat: 'named',
     events: ['PreInvocation', 'PostToolUse', 'Stop']
   }
+}
+
+export function remoteArgs(id: TerminalId, prompt: string): string[] | null {
+  return adapters[id].remoteArgs?.(prompt) ?? null
 }
