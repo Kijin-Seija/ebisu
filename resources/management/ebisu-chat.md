@@ -42,6 +42,30 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
    完成后必须运行：CHAT reply --channel C --id ID --type result --body-file -（正文写结论、分支/提交、验证结果）
    ```
 
+## 三、各终端的具体做法
+
+“处理会话”看不到轮询会话的历史，第 4 步的提示必须自包含。
+
+### Qoder
+
+- 定时任务：`qoder_cron`（先 `list` 查找同名任务），间隔 120000 ms，`outputMode` 用 `merged`（每次触发复用同一个轮询会话；`independent` 会每次新开轮询会话，不推荐）。
+- 新建处理会话：内置工具 `create_chat_session`（`mcp__builtin__create_chat_session`），入参 `prompt` 为第 4 步提示；返回 `{ sessionId }` 即新会话 ID，用它 `claim`。
+- 投递到绑定会话：`send_message_to_chat_session`（`mcp__builtin__send_message_to_chat_session`），入参 `{ sessionId, prompt }`。目标必须是本机未归档的会话且不能是轮询会话自身；投递失败（会话已归档/不存在）时按“绑定会话不可用”新建会话。
+- 成功只表示已派发，不代表完成；轮询会话不要等待处理结果。
+
+### DeepSeek Harness（dsh）
+
+- 定时任务：`schedule_create`，`every_seconds: 120`（最小 60）。提醒投递回创建它的会话，因此轮询始终在同一会话中运行。
+- 新建处理会话：内置 `subagent`（入参 `description` 3–5 词、`prompt` 为第 4 步提示、可选 `cwd` 为项目目录）；返回 `started subagent <uuid>`，该 uuid 即会话 ID（子会话内 `$DSH_SESSION_ID` 相同），用它 `claim`。
+- 投递到绑定会话：`send_message`（`agent_id` 为绑定会话 ID）。只能发给本轮询会话的**直接子会话**；轮询会话重建后旧绑定无法投递，按“绑定会话不可用”重新 `subagent` 新建。委派深度为 1，处理会话不能再建子会话。
+- 本终端没有 `subagent` 工具时（DSH 版本或委派深度配置为 0），按第 2 步回复 `type=error`，不要改用 `dsh headless` 或在轮询会话内处理。
+
+### Claude Code（worker 时）
+
+- 定时任务：CronCreate（见第一节）。
+- 新建处理会话：`claude --bg "<第 4 步提示>"`，输出的 ID 即会话 ID。
+- 投递到绑定会话：`claude --bg --resume <会话ID> "<提示>"`；该会话正在交互运行时 Claude 会另开副本并提示，此时以新 ID 重新 `claim`。
+
 ## 规则
 
 - 正文较长或含特殊字符时一律用 `--body-file -` 加 heredoc 从标准输入传入，不要把正文拼进命令行参数。单条正文上限 32 KiB；截图、日志等大文件放到 git 或 Jira，消息里只写链接。
