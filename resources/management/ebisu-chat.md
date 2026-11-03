@@ -27,6 +27,7 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
      - 没有绑定会话，或绑定会话已不存在、无法发送：**新建一个会话**，把“处理消息”提示作为新会话的首条输入，再用新会话 ID 执行 `claim`，新会话即成为该频道的绑定会话。
      - 本终端确实无法新建会话时，不要在轮询会话内处理：`CHAT reply --channel C --id ID --type error --body "无法新建会话：<原因>"`，由主控改派。
    - `claim` 返回 `won:false` 表示你的其他会话已抢先认领，跳过这条。
+   - **认领只由轮询会话（或主控）执行**；处理会话收到的提示已说明“已认领”，不要再次 `claim`。
    - 带 `staleClaim` 的 task 表示之前的认领超过 4 小时没有进展，视同未处理重新分配。
 3. 处理完成后由**处理该消息的会话**回复：
    `CHAT reply --channel C --id ID [--type result] --body-file - <<'EOF'` … `EOF`
@@ -39,7 +40,8 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
    消息正文
    ---
    需要上下文时运行：CHAT history --channel C
-   完成后必须运行：CHAT reply --channel C --id ID --type result --body-file -（正文写结论、分支/提交、验证结果）
+   本消息已由轮询会话认领并绑定到你（会话 SESSION），不要再执行 claim。
+   完成后必须运行：CHAT reply --channel C --id ID --type result --body-file -（正文写结论、分支/提交、验证结果；需要写会话 ID 时写 SESSION，不要写 local- 开头的上报 ID）
    ```
 
 ## 三、各终端的具体做法
