@@ -26,6 +26,7 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
      - task 带有 `binding.session`（该频道已有绑定会话）：向该会话发送“处理消息”提示（见第 4 步），再 `CHAT claim --channel C --id ID --session 该会话ID`。同一频道的后续消息（如多轮审核意见）都进入这个会话，保持上下文连续。
      - 没有绑定会话，或绑定会话已不存在、无法发送：**新建一个会话**，把“处理消息”提示作为新会话的首条输入，再用新会话 ID 执行 `claim`，新会话即成为该频道的绑定会话。
      - 本终端确实无法新建会话时，不要在轮询会话内处理：`CHAT reply --channel C --id ID --type error --body "无法新建会话：<原因>"`，由主控改派。
+     - **一个频道只对应一个处理会话**：频道 A 的消息不得投给频道 B 的处理会话；跨频道的依赖用 `CHAT progress/result` 协调，不要靠共用会话排队。
    - `claim` 返回 `won:false` 表示你的其他会话已抢先认领，跳过这条。
    - **认领只由轮询会话（或主控）执行**；处理会话收到的提示已说明“已认领”，不要再次 `claim`。
    - 带 `staleClaim` 的 task 表示之前的认领超过 4 小时没有进展，视同未处理重新分配。
@@ -58,8 +59,10 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 ### DeepSeek Harness（dsh）
 
 - 定时任务：`schedule_create`，`every_seconds: 120`（最小 60）。提醒投递回创建它的会话，因此轮询始终在同一会话中运行。
-- 新建处理会话：内置 `subagent`（入参 `description` 3–5 词、`prompt` 为第 4 步提示、可选 `cwd` 为项目目录）；返回 `started subagent <uuid>`。**用这个 uuid `claim`**——它是之后 `send_message` 的 `agent_id`；不要用子会话里的 `$DSH_SESSION_ID`（部分 DSH 版本中它等于父会话 ID）。
-- 投递到绑定会话：`send_message`（`agent_id` 为绑定会话 ID）。只能发给本轮询会话的**直接子会话**；轮询会话重建后旧绑定无法投递，按“绑定会话不可用”重新 `subagent` 新建。委派深度为 1，处理会话不能再建子会话。
+- **轮询会话是纯路由**：只做 `inbox`、`claim`、`subagent`/`send_message`（以及必要的 `reply/done`），不在轮询会话内处理任务内容、不运行长命令、不做状态轮询、不等待处理结果、不使用 `ask_user_question`。需要人决策时，由处理会话在频道内回复 `type=error`/提问，或交主控；轮询会话结束本轮。
+- **一个终端（ME）只保留一个轮询会话和一个 `ebisu-chat:ME` 定时任务**：DSH 的 `schedule_list` 只列当前会话，发现不了其他会话注册的同名任务；重复注册会出现两个 poller 抢消息、互相覆盖频道绑定。切换轮询会话前先删除旧定时任务。
+- 新建处理会话：内置 `subagent`（入参 `description` 3–5 词、`prompt` 为第 4 步提示、可选 `cwd` 为项目目录）；返回 `started subagent <uuid>`。**用这个 uuid `claim`**——它是之后 `send_message` 的 `agent_id`；不要用子会话里的 `$DSH_SESSION_ID`（部分 DSH 版本中它等于父会话 ID）。注意 `cwd` 只改工作目录，不改会话 workspace/sandbox；处理会话继承轮询会话的 workspace，跨项目频道需轮询会话本身对目标目录可写。
+- 投递到绑定会话：`send_message`（`agent_id` 为绑定会话 ID）。只能发给本轮询会话的**直接子会话**；绑定会话不是当前轮询会话的直接子会话（轮询会话重建/换会话/已归档）时，按“绑定会话不可用”重新 `subagent` 新建，并在提示词里带 `CHAT history --channel C` 摘要。委派深度为 1，处理会话不能再建子会话。
 - 本终端没有 `subagent` 工具时（DSH 版本或委派深度配置为 0），按第 2 步回复 `type=error`，不要改用 `dsh headless` 或在轮询会话内处理。
 
 ### Claude Code（worker 时）
@@ -74,6 +77,7 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 - 派单或发起新话题用 `CHAT send --channel C --to 对方参与者 --type task --body-file -`；首次使用的频道先 `CHAT create --channel C --devices 对方设备名`。
 - 客户端返回 `ok:false` 时如实报告原因；`ebisu-not-running` 说明本机 Ebisu 未启动，本次轮询直接结束，不要反复重试。
 - 不要删除或修改已发出的消息；对话只追加，各设备的“远程任务 → Agent 对话”界面会显示全部往来。
+- 绑定粒度是频道，不是单条消息：同一频道的多条消息串行进同一个处理会话；不同频道用不同处理会话并行。频道 A 的任务不得投给频道 B 的处理会话。
 - **对话完成后删除频道**：主控（或发起方）确认频道内的任务都已回复、无待处理消息后，运行 `CHAT delete --channel C`。删除会同时清除本机与所有参与设备上的该频道及全部消息（离线设备上线同步后也会删除），不可恢复；之后可用同名 `CHAT create` 重新创建（例如复用 `control`）。不要删除仍有进行中任务的频道。
 - **8 小时自动清理**：每台设备启动后不久及之后每 8 小时检查一次，最近 8 小时没有新消息（无消息时按频道更新时间）的频道会被自动删除并同步到其他设备。处理时间可能超过 8 小时的任务，要定期 `CHAT progress` 保持频道活跃；常驻频道（如 `control`）被清理后再次使用前先 `CHAT create`。
 - `send`/`claim` 等返回“频道不存在”时，说明频道已被删除或清理：需要继续时先 `CHAT create` 重新创建。
