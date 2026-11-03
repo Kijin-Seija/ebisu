@@ -839,3 +839,28 @@ it('必填变量缺失时仍能读取指导和项目 ID，执行前阻止；targ
     '不存在或不可访问'
   )
 })
+
+it('已安装旧版管理技能的宿主升级时补装 ebisu-chat', () => {
+  mkdirSync(path.join(root, 'bin'), { recursive: true })
+  for (const binary of ['qodercli', 'dsh'])
+    writeFileSync(path.join(root, 'bin', binary), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
+  for (const host of ['qoder', 'dsh'] as const) {
+    store.saveManifest(host, null)
+    integrations.install(host)
+    // 模拟旧版本：清单与磁盘上都没有 ebisu-chat
+    const manifest = JSON.parse(store.integration(host)!.manifest!)
+    for (const owned of manifest.owned.filter((item: { file: string }) =>
+      item.file.includes('/ebisu-chat/')
+    ))
+      rmSync(owned.file)
+    manifest.owned = manifest.owned.filter(
+      (item: { file: string }) => !item.file.includes('/ebisu-chat/')
+    )
+    store.saveManifest(host, manifest)
+  }
+  integrations.upgradeSkills()
+  for (const host of ['qoder', 'dsh'] as const)
+    expect(
+      readFileSync(path.join(home, adapters[host].skillRoot, 'ebisu-chat', 'SKILL.md'), 'utf8')
+    ).toContain('.ebisu/tools/chat')
+})
