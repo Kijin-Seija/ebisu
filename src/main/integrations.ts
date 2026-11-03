@@ -189,6 +189,22 @@ ELECTRON_RUN_AS_NODE=1 exec ${executable} ${quote(`${client}.cjs`)} --runtime ${
 ${end}`
   }
 
+  /**
+   * 磁盘同名文件只有在能确定“这是我们自己写过的内容”时才允许覆盖：与目标一致、清单记录的正是当前原文，
+   * 或仍带 Ebisu 生成标记。降级安装包会用旧技能清单整体覆盖 owned，把新技能的所有权记录抹掉却留下文件，
+   * 只认哈希会让后续安装永远拒绝覆盖、每次重启都静默失败；用户手写或改写的 skill 没有任何标记，仍然拒绝。
+   */
+  private canOverwrite(
+    current: string,
+    expected: string,
+    old: OwnedFile | undefined,
+    markers: string[]
+  ): boolean {
+    if (current === expected) return true
+    if (old && hash(current) === old.hash) return true
+    return markers.length > 0 && markers.every((marker) => current.includes(marker))
+  }
+
   /** 所有改动先保存原文；失败时按逆序回滚，备份保留在应用数据目录。 */
   install(id: TerminalId): void {
     if (!this.detect(id).length) throw new Error(`${terminalNames[id]} 尚未安装`)
@@ -224,8 +240,7 @@ ${end}`
       const oldOwned = manifest?.owned.find((owned) => owned.file === skillFile)
       if (
         existsSync(skillFile) &&
-        read(skillFile) !== skill &&
-        (!oldOwned || hash(read(skillFile)) !== oldOwned.hash)
+        !this.canOverwrite(read(skillFile), skill, oldOwned, [begin, end])
       )
         throw new Error(`已有同名 skill 被修改，请先备份或移走：${skillFile}`)
       write(skillFile, skill)
@@ -238,7 +253,10 @@ ${end}`
         const contents = `---\nname: ${name}\ndescription: ${description}\n${id === 'workbuddy' ? 'agent_created: true\n' : ''}---\n\n先读取中央说明：${source}\n\n客户端：${quote(client)} --terminal ${id}\n运行客户端 protocol 获取当前协议与示例。\n`
         const entry = path.join(this.home, adapter.skillRoot, name, 'SKILL.md')
         const old = manifest?.owned.find((owned) => owned.file === entry)
-        if (existsSync(entry) && (!old || hash(read(entry)) !== old.hash))
+        if (
+          existsSync(entry) &&
+          !this.canOverwrite(read(entry), contents, old, [`name: ${name}`, '先读取中央说明：'])
+        )
           throw new Error(`同名管理 skill 已存在或已修改：${entry}`)
         write(entry, contents)
         managedSkills.push({ file: entry, hash: hash(contents) })
@@ -246,7 +264,8 @@ ${end}`
           const policyFile = path.join(this.home, adapter.skillRoot, name, 'agents/openai.yaml')
           const policy = 'policy:\n  allow_implicit_invocation: false\n'
           const oldPolicy = manifest?.owned.find((owned) => owned.file === policyFile)
-          if (existsSync(policyFile) && (!oldPolicy || hash(read(policyFile)) !== oldPolicy.hash))
+          // openai.yaml 没有 Ebisu 专属标记，用户可能自行调整策略，只接受内容完全一致或清单原文。
+          if (existsSync(policyFile) && !this.canOverwrite(read(policyFile), policy, oldPolicy, []))
             throw new Error(`管理 skill 配置冲突：${policyFile}`)
           write(policyFile, policy)
           managedSkills.push({ file: policyFile, hash: hash(policy) })
@@ -426,8 +445,15 @@ ${end}`
       const hasManagementSkills = managementSkills.every((name) =>
         manifest.owned.some((owned) => owned.file.includes(`/${name}/`))
       )
+      // 受管文件被终端清理或手工删除后，清单与规则仍一致，需要靠这一项触发补装。
+      const missingOwnedFile = manifest.owned.some((owned) => !existsSync(owned.file))
       // 规则也属于受管版本：已有管理技能的宿主仍需更新旧的故障判定说明。
-      if (hasManagementSkills && read(manifest.rule).includes(this.ruleText(id))) continue
+      if (
+        hasManagementSkills &&
+        !missingOwnedFile &&
+        read(manifest.rule).includes(this.ruleText(id))
+      )
+        continue
       try {
         this.install(id)
       } catch (error) {
