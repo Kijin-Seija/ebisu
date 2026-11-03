@@ -369,7 +369,7 @@ it('本机删除频道：清除频道、消息与游标，写入删除标记并�
   pushes.length = 0
   const tombstone = chat.deleteChannel('bug/S-2')
   expect(tombstone).toMatchObject({ id: 'bug/S-2', deletedBy: device.id })
-  expect(tombstone.devices.sort()).toEqual([device.id, peer].sort())
+  expect([...tombstone.devices].sort()).toEqual([device.id, peer].sort())
   expect(chat.channel('bug/S-2')).toBeNull()
   expect(chat.history('bug/S-2')).toEqual([])
   expect(count('SELECT COUNT(*) AS n FROM chat_messages WHERE channel=?')).toBe(0)
