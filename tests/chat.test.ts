@@ -231,3 +231,110 @@ it('本机 HTTP 接口与 report --chat 命令行', async () => {
     await server.close()
   }
 }, 20000)
+
+it('chat 客户端：派单、认领竞争、回复、完成标记、绑定会话与超时重派', async () => {
+  const runtimeFile = path.join(root, 'runtime.json')
+  const server = await startServer(store, runtimeFile, () => {}, undefined, chat)
+  const cli = path.join(__dirname, '../resources/integration/chat.cjs')
+  const run = (args: string[], input?: string) =>
+    new Promise<{ code: number; out: Record<string, any> }>((resolve, reject) => {
+      const child = spawn(process.execPath, [cli, '--runtime', runtimeFile, ...args], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      })
+      let out = ''
+      child.stdout.on('data', (chunk) => (out += chunk))
+      child.once('error', reject)
+      child.once('close', (code) => resolve({ code: code ?? 0, out: JSON.parse(out) }))
+      child.stdin.end(input ?? '')
+    })
+  const as = (who: string) => ['--terminal', 'claude', '--member', who]
+  try {
+    expect((await run(['--terminal', 'qoder', 'whoami'])).out.member).toMatch(/\/qoder$/)
+    await run(['create', ...as('main'), '--channel', 'bug/S-1', '--title', 'Bug 1'])
+    const task = (
+      await run(
+        ['send', ...as('main'), '--channel', 'bug/S-1', '--to', 'w/qoder', '--body-file', '-'],
+        '修复 S-1 `$(x)`'
+      )
+    ).out.message
+    // 定向消息让接收者自动成为频道参与者，inbox 无需事先加入
+    let inbox = (await run(['inbox', ...as('w/qoder')])).out
+    expect(inbox.tasks.map((t: { id: string }) => t.id)).toEqual([task.id])
+    expect(inbox.tasks[0]).toMatchObject({ body: '修复 S-1 `$(x)`', from: 'main', binding: null })
+    const first = (
+      await run([
+        'claim',
+        ...as('w/qoder'),
+        '--channel',
+        'bug/S-1',
+        '--id',
+        task.id,
+        '--session',
+        's1'
+      ])
+    ).out
+    const second = (
+      await run([
+        'claim',
+        ...as('w/qoder'),
+        '--channel',
+        'bug/S-1',
+        '--id',
+        task.id,
+        '--session',
+        's2'
+      ])
+    ).out
+    expect([first.won, second.won]).toEqual([true, false])
+    inbox = (await run(['inbox', ...as('w/qoder')])).out
+    expect(inbox.tasks).toEqual([])
+    expect(inbox.inProgress[0].claim.session).toBe('s1')
+    // 超时的认领重新出现在待处理列表
+    inbox = (await run(['inbox', ...as('w/qoder'), '--stale-minutes', '0'])).out
+    expect(inbox.tasks[0].staleClaim.session).toBe('s1')
+    expect(
+      (await run(['binding', ...as('w/qoder'), '--channel', 'bug/S-1'])).out.binding.session
+    ).toBe('s1')
+    await run([
+      'progress',
+      ...as('w/qoder'),
+      '--channel',
+      'bug/S-1',
+      '--id',
+      task.id,
+      '--body',
+      '50%'
+    ])
+    const reply = (
+      await run(
+        ['reply', ...as('w/qoder'), '--channel', 'bug/S-1', '--id', task.id, '--body-file', '-'],
+        '已修复'
+      )
+    ).out.message
+    expect(reply).toMatchObject({ to: 'main', type: 'result', replyTo: task.id })
+    expect((await run(['inbox', ...as('w/qoder'), '--stale-minutes', '0'])).out.tasks).toEqual([])
+    // 主控收到结果；标记完成后不再出现
+    const controller = (await run(['inbox', ...as('main')])).out
+    expect(controller.tasks.map((t: { body: string }) => t.body)).toEqual(['已修复'])
+    await run(['done', ...as('main'), '--channel', 'bug/S-1', '--id', reply.id])
+    expect((await run(['inbox', ...as('main')])).out.tasks).toEqual([])
+    // 错误以 ok:false 与非零退出码返回
+    const missing = await run([
+      'reply',
+      ...as('main'),
+      '--channel',
+      'bug/S-1',
+      '--id',
+      'nope',
+      '--body',
+      'x'
+    ])
+    expect(missing.code).toBe(1)
+    expect(missing.out).toMatchObject({ ok: false, reason: 'message not found' })
+    expect((await run(['send', ...as('main'), '--channel', 'bug/S-1'])).out.reason).toBe(
+      'missing --to'
+    )
+  } finally {
+    await server.close()
+  }
+}, 30000)

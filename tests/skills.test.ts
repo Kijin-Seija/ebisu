@@ -271,9 +271,7 @@ it('敏感值加密持久化、不进入详情或遮罩接口，单独读取时�
   expect(persisted.value).not.toContain('my-secret-value')
   expect(JSON.stringify(skills.detail(result.id))).not.toContain('my-secret-value')
   expect(
-    skills
-      .variables(result.id, null)
-      .find((item) => item.name === 'SECRET_TOKEN')
+    skills.variables(result.id, null).find((item) => item.name === 'SECRET_TOKEN')
   ).toMatchObject({ global: { value: null, hasValue: true } })
   skills.addVariable(result.id, {
     name: 'OTHER_SECRET',
@@ -355,12 +353,7 @@ it('变量按定义限定全局、终端、项目组合，未开放层级不可�
     scopes: ['skill', 'project']
   })
   expect(() =>
-    skills.setVariable(
-      result.id,
-      'PROJECT_VALUE',
-      { scope: 'terminal', terminal: 'codex' },
-      'x'
-    )
+    skills.setVariable(result.id, 'PROJECT_VALUE', { scope: 'terminal', terminal: 'codex' }, 'x')
   ).toThrow('层级')
   expect(() =>
     skills.addVariable(result.id, {
@@ -541,12 +534,14 @@ it('HTTP 技能接口认证、请求校验、并发修订与初始内容不可�
   ).json()
   expect(experience.folderId).toBe(first.id)
   expect(
-    (await send('experience-add', {
-      skillId: result.id,
-      path: path.join(root, 'unregistered'),
-      content: '不应降级为全局',
-      evidence: '验证'
-    })).status
+    (
+      await send('experience-add', {
+        skillId: result.id,
+        path: path.join(root, 'unregistered'),
+        content: '不应降级为全局',
+        evidence: '验证'
+      })
+    ).status
   ).toBe(404)
   const updates = await Promise.all([
     send('experience-update', {
@@ -574,10 +569,14 @@ it('管理技能随八种集成绑定安装；旧绑定补齐且重复升级不�
     store.saveManifest(host, null)
     integrations.install(host)
     const directory = path.join(home, adapters[host].skillRoot)
-    for (const name of ['ebisu-skill-create', 'ebisu-skill-discuss'])
+    for (const name of ['ebisu-skill-create', 'ebisu-skill-discuss', 'ebisu-chat'])
       expect(readFileSync(path.join(directory, name, 'SKILL.md'), 'utf8')).toContain(
         '.ebisu/management/'
       )
+    // ebisu-chat 入口指向对话客户端而不是技能客户端
+    expect(readFileSync(path.join(directory, 'ebisu-chat', 'SKILL.md'), 'utf8')).toMatch(
+      /\.ebisu\/tools\/chat' --terminal /
+    )
     if (host === 'codex')
       expect(
         readFileSync(path.join(directory, 'ebisu-skill-create/agents/openai.yaml'), 'utf8')

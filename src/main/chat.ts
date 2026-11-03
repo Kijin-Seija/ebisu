@@ -228,9 +228,11 @@ export class Chat {
       devices.add(id)
     }
     const now = this.now()
+    const existing = this.channel(data.id)
     const channel = this.merge({
       id: data.id,
-      title: data.title || data.id,
+      // 未提供标题的重复创建不能用默认标题覆盖已有标题。
+      title: data.title || existing?.title || data.id,
       devices: [...devices],
       members: data.members ?? [],
       createdBy: self,

@@ -23,6 +23,16 @@ import { FileChanges, safeFile } from './skill-files'
 import { adapters, terminalNames } from './terminal-adapters'
 export { terminalNames } from './terminal-adapters'
 
+/** 随应用发布的管理技能；入口文件只指向数据目录中的中央说明与客户端。 */
+const managementSkills = ['ebisu-skill-create', 'ebisu-skill-discuss', 'ebisu-chat'] as const
+const managementDescriptions: Record<(typeof managementSkills)[number], string> = {
+  'ebisu-skill-create':
+    'Only create an Ebisu skill when the user explicitly invokes ebisu-skill-create; do not create skills implicitly during ordinary work.',
+  'ebisu-skill-discuss':
+    'Discuss, explain, update, add or delete specified Ebisu experience entries when the user invokes ebisu-skill-discuss with id[].',
+  'ebisu-chat':
+    'Use when the user invokes ebisu-chat or an [ebisu-chat:...] scheduled prompt fires: register (once) a recurring task that polls Ebisu agent chat, then claim messages addressed to this terminal, dispatch them to a new or bound session, and reply in the chat.'
+}
 const execute = promisify(execFile)
 export interface IntegrationOptions {
   home?: string
@@ -60,6 +70,8 @@ export class Integrations {
   readonly home: string
   readonly bridge: string
   readonly skillsClient: string
+  /** Agent 对话客户端，供 ebisu-chat 管理技能读写本机对话接口。 */
+  readonly chatClient: string
   private readonly appDirectories: string[]
   constructor(
     private readonly store: Store,
@@ -72,6 +84,7 @@ export class Integrations {
     ]
     this.bridge = path.join(options.dataDirectory, 'integration', 'report')
     this.skillsClient = path.join(options.dataDirectory, '.ebisu', 'tools', 'skills')
+    this.chatClient = path.join(options.dataDirectory, '.ebisu', 'tools', 'chat')
   }
 
   /** 分辨“确实安装了可执行程序”和“只有卸载后残留配置”。 */
@@ -121,7 +134,13 @@ export class Integrations {
       mode: 0o700
     })
     chmodSync(this.skillsClient, 0o700)
-    for (const name of ['ebisu-skill-create', 'ebisu-skill-discuss']) {
+    copyFileSync(
+      path.join(this.options.resources, 'integration/chat.cjs'),
+      `${this.chatClient}.cjs`
+    )
+    writeFileSync(this.chatClient, this.launcher(this.chatClient, runtime, false), { mode: 0o700 })
+    chmodSync(this.chatClient, 0o700)
+    for (const name of managementSkills) {
       const destination = safeFile(this.options.dataDirectory, `.ebisu/management/${name}.md`)
       mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 })
       copyFileSync(path.join(this.options.resources, 'management', `${name}.md`), destination)
@@ -211,13 +230,12 @@ ${end}`
         throw new Error(`已有同名 skill 被修改，请先备份或移走：${skillFile}`)
       write(skillFile, skill)
       const managedSkills: OwnedFile[] = [{ file: skillFile, hash: hash(skill) }]
-      for (const name of ['ebisu-skill-create', 'ebisu-skill-discuss']) {
-        const description =
-          name === 'ebisu-skill-create'
-            ? 'Only create an Ebisu skill when the user explicitly invokes ebisu-skill-create; do not create skills implicitly during ordinary work.'
-            : 'Discuss, explain, update, add or delete specified Ebisu experience entries when the user invokes ebisu-skill-discuss with id[].'
+      for (const name of managementSkills) {
+        const description = managementDescriptions[name]
         const source = path.join(this.options.dataDirectory, '.ebisu', 'management', `${name}.md`)
-        const contents = `---\nname: ${name}\ndescription: ${description}\n${id === 'workbuddy' ? 'agent_created: true\n' : ''}---\n\n先读取中央说明：${source}\n\n客户端：${quote(this.skillsClient)} --terminal ${id}\n运行客户端 protocol 获取当前协议与示例。\n`
+        // ebisu-chat 使用对话客户端，其余管理技能使用技能客户端。
+        const client = name === 'ebisu-chat' ? this.chatClient : this.skillsClient
+        const contents = `---\nname: ${name}\ndescription: ${description}\n${id === 'workbuddy' ? 'agent_created: true\n' : ''}---\n\n先读取中央说明：${source}\n\n客户端：${quote(client)} --terminal ${id}\n运行客户端 protocol 获取当前协议与示例。\n`
         const entry = path.join(this.home, adapter.skillRoot, name, 'SKILL.md')
         const old = manifest?.owned.find((owned) => owned.file === entry)
         if (existsSync(entry) && (!old || hash(read(entry)) !== old.hash))
@@ -404,8 +422,9 @@ ${end}`
       const row = this.store.integration(id)
       if (!row?.manifest || !this.detect(id).length) continue
       const manifest = JSON.parse(row.manifest) as Manifest
-      const hasManagementSkills = manifest.owned.some((owned) =>
-        owned.file.includes('/ebisu-skill-create/')
+      // 新增的管理技能（如 ebisu-chat）也要补装到已绑定的宿主。
+      const hasManagementSkills = managementSkills.every((name) =>
+        manifest.owned.some((owned) => owned.file.includes(`/${name}/`))
       )
       // 规则也属于受管版本：已有管理技能的宿主仍需更新旧的故障判定说明。
       if (hasManagementSkills && read(manifest.rule).includes(this.ruleText(id))) continue
@@ -492,7 +511,7 @@ ${end}`
       let detail = evidence.length ? '尚未安装通知集成' : '未检测到终端；安装后可重新探测'
       if (row?.manifest) {
         const manifest = JSON.parse(row.manifest) as Manifest
-        const managementIntact = ['ebisu-skill-create', 'ebisu-skill-discuss'].every((name) =>
+        const managementIntact = managementSkills.every((name) =>
           manifest.owned.some(
             (owned) => owned.file === path.join(this.home, adapters[id].skillRoot, name, 'SKILL.md')
           )
