@@ -56,7 +56,7 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 ### DeepSeek Harness（dsh）
 
 - 定时任务：`schedule_create`，`every_seconds: 120`（最小 60）。提醒投递回创建它的会话，因此轮询始终在同一会话中运行。
-- 新建处理会话：内置 `subagent`（入参 `description` 3–5 词、`prompt` 为第 4 步提示、可选 `cwd` 为项目目录）；返回 `started subagent <uuid>`，该 uuid 即会话 ID（子会话内 `$DSH_SESSION_ID` 相同），用它 `claim`。
+- 新建处理会话：内置 `subagent`（入参 `description` 3–5 词、`prompt` 为第 4 步提示、可选 `cwd` 为项目目录）；返回 `started subagent <uuid>`。**用这个 uuid `claim`**——它是之后 `send_message` 的 `agent_id`；不要用子会话里的 `$DSH_SESSION_ID`（部分 DSH 版本中它等于父会话 ID）。
 - 投递到绑定会话：`send_message`（`agent_id` 为绑定会话 ID）。只能发给本轮询会话的**直接子会话**；轮询会话重建后旧绑定无法投递，按“绑定会话不可用”重新 `subagent` 新建。委派深度为 1，处理会话不能再建子会话。
 - 本终端没有 `subagent` 工具时（DSH 版本或委派深度配置为 0），按第 2 步回复 `type=error`，不要改用 `dsh headless` 或在轮询会话内处理。
 
