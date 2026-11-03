@@ -549,12 +549,41 @@ it('受管 skill 文件被删除后，重启会自动补装', () => {
   expect(existsSync(path.join(home, '.grok/skills/ebisu-chat/SKILL.md'))).toBe(true)
   expect(integrations.views().find((view) => view.id === 'grok')?.health).not.toBe('damaged')
 })
+it('受管入口内容过期后，重启回到应用生成的版本', () => {
+  binary('grok')
+  integrations.install('grok')
+  // 旧版本写过的入口：清单与规则都没变化，只有生成内容本身过期了。
+  file(
+    '.grok/skills/ebisu-chat/SKILL.md',
+    "---\nname: ebisu-chat\ndescription: 旧版裸描述\n---\n\n先读取中央说明：/tmp/ebisu-chat.md\n\n客户端：'/chat' --terminal grok\n"
+  )
+  integrations.upgradeSkills()
+  expect(text('.grok/skills/ebisu-chat/SKILL.md')).toContain('description: "Use when')
+  expect(integrations.views().find((view) => view.id === 'grok')?.health).not.toBe('damaged')
+})
 it('用户手写的同名管理 skill 仍然拒绝覆盖并整体回滚', () => {
   binary('grok')
   file('.grok/skills/ebisu-chat/SKILL.md', '# 我自己写的对话技能\n')
   expect(() => integrations.install('grok')).toThrow('已存在或已修改')
   expect(text('.grok/skills/ebisu-chat/SKILL.md')).toBe('# 我自己写的对话技能\n')
   expect(existsSync(path.join(home, '.grok/skills/ebisu-grok/SKILL.md'))).toBe(false)
+})
+it('管理 skill 的 description 必须是 YAML 安全值，否则宿主会把技能判成非法包', () => {
+  binary('grok')
+  integrations.install('grok')
+  for (const [entry, keyword] of [
+    ['.grok/skills/ebisu-chat/SKILL.md', 'ebisu-chat'],
+    ['.grok/skills/ebisu-grok/SKILL.md', 'Ebisu project dashboard'],
+    ['.grok/skills/ebisu-skill-discuss/SKILL.md', 'ebisu-skill-discuss']
+  ] as const) {
+    const line = text(entry)
+      .split('---')[1]
+      .split('\n')
+      .find((row) => row.startsWith('description:'))!
+    // 裸值里出现「: 」会让 frontmatter 解析失败，Qoder 会把技能从安装列表和 / 菜单剔除。
+    expect(line.startsWith('description: "')).toBe(true)
+    expect(JSON.parse(line.slice('description: '.length))).toContain(keyword)
+  }
 })
 it('六种原生 hook 终端完成真实 wrapper→HTTP→SQLite 通知链路；检查不伪造健康', async () => {
   const folder = store.addFolder(root)

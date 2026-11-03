@@ -56,6 +56,14 @@ interface Manifest {
   codexFeatureAdded?: boolean
   codexFeatureLimited?: boolean
 }
+/** 受管 skill 入口：file 是宿主目录里的路径，contents 是应用期望写入的原文。 */
+interface SkillEntry {
+  file: string
+  contents: string
+  /** 内容变化后用于认领自家遗留文件的标记；空数组表示只接受内容一致或清单记录的原文。 */
+  markers: string[]
+  conflict: string
+}
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const read = (file: string) => (existsSync(file) ? readFileSync(file, 'utf8') : '')
 /** hook command 必须经 shell 执行，所有动态路径都按 POSIX 单引号转义。 */
@@ -205,6 +213,48 @@ ${end}`
     return markers.length > 0 && markers.every((marker) => current.includes(marker))
   }
 
+  /**
+   * 该终端全部受管 skill 入口及其期望内容。install 与启动升级判定共用同一份生成结果，
+   * 否则模板变化（例如 description 改写）不会被任何一边发现，宿主会一直拿着旧内容。
+   */
+  private skillEntries(id: TerminalId): SkillEntry[] {
+    const adapter = adapters[id]
+    const activityFile = path.join(this.home, adapter.skillRoot, `ebisu-${id}`, 'SKILL.md')
+    const activity = `---\nname: ebisu-${id}\ndescription: ${JSON.stringify(`Notify the local Ebisu project dashboard when this ${terminalNames[id]} session reads, plans or works in a local folder; maintain activity, waiting and error state until the task finishes.`)}\n---\n\n${this.ruleText(id)}\n`
+    const entries: SkillEntry[] = [
+      {
+        file: activityFile,
+        contents: activity,
+        markers: [begin, end],
+        conflict: `已有同名 skill 被修改，请先备份或移走：${activityFile}`
+      }
+    ]
+    for (const name of managementSkills) {
+      const source = path.join(this.options.dataDirectory, '.ebisu', 'management', `${name}.md`)
+      // ebisu-chat 使用对话客户端，其余管理技能使用技能客户端。
+      const client = name === 'ebisu-chat' ? this.chatClient : this.skillsClient
+      // 宿主按 YAML 解析 frontmatter；裸值中出现「: 」会让整包被判成非法技能并从 / 菜单剔除，所以 description 始终加引号。
+      const file = path.join(this.home, adapter.skillRoot, name, 'SKILL.md')
+      entries.push({
+        file,
+        contents: `---\nname: ${name}\ndescription: ${JSON.stringify(managementDescriptions[name])}\n${id === 'workbuddy' ? 'agent_created: true\n' : ''}---\n\n先读取中央说明：${source}\n\n客户端：${quote(client)} --terminal ${id}\n运行客户端 protocol 获取当前协议与示例。\n`,
+        markers: [`name: ${name}`, '先读取中央说明：'],
+        conflict: `同名管理 skill 已存在或已修改：${file}`
+      })
+      if (id === 'codex') {
+        // openai.yaml 没有 Ebisu 专属标记，用户可能自行调整策略，因此只接受内容一致或清单记录的原文。
+        const policyFile = path.join(this.home, adapter.skillRoot, name, 'agents/openai.yaml')
+        entries.push({
+          file: policyFile,
+          contents: 'policy:\n  allow_implicit_invocation: false\n',
+          markers: [],
+          conflict: `管理 skill 配置冲突：${policyFile}`
+        })
+      }
+    }
+    return entries
+  }
+
   /** 所有改动先保存原文；失败时按逆序回滚，备份保留在应用数据目录。 */
   install(id: TerminalId): void {
     if (!this.detect(id).length) throw new Error(`${terminalNames[id]} 尚未安装`)
@@ -235,41 +285,16 @@ ${end}`
       writeFileSync(file, content, { mode: exists ? statSync(file).mode & 0o777 : 0o600 })
     }
     try {
-      const skillFile = path.join(this.home, adapter.skillRoot, `ebisu-${id}`, 'SKILL.md')
-      const skill = `---\nname: ebisu-${id}\ndescription: Notify the local Ebisu project dashboard when this ${terminalNames[id]} session reads, plans or works in a local folder; maintain activity, waiting and error state until the task finishes.\n---\n\n${this.ruleText(id)}\n`
-      const oldOwned = manifest?.owned.find((owned) => owned.file === skillFile)
-      if (
-        existsSync(skillFile) &&
-        !this.canOverwrite(read(skillFile), skill, oldOwned, [begin, end])
-      )
-        throw new Error(`已有同名 skill 被修改，请先备份或移走：${skillFile}`)
-      write(skillFile, skill)
-      const managedSkills: OwnedFile[] = [{ file: skillFile, hash: hash(skill) }]
-      for (const name of managementSkills) {
-        const description = managementDescriptions[name]
-        const source = path.join(this.options.dataDirectory, '.ebisu', 'management', `${name}.md`)
-        // ebisu-chat 使用对话客户端，其余管理技能使用技能客户端。
-        const client = name === 'ebisu-chat' ? this.chatClient : this.skillsClient
-        const contents = `---\nname: ${name}\ndescription: ${description}\n${id === 'workbuddy' ? 'agent_created: true\n' : ''}---\n\n先读取中央说明：${source}\n\n客户端：${quote(client)} --terminal ${id}\n运行客户端 protocol 获取当前协议与示例。\n`
-        const entry = path.join(this.home, adapter.skillRoot, name, 'SKILL.md')
-        const old = manifest?.owned.find((owned) => owned.file === entry)
+      const managedSkills: OwnedFile[] = []
+      for (const entry of this.skillEntries(id)) {
+        const old = manifest?.owned.find((owned) => owned.file === entry.file)
         if (
-          existsSync(entry) &&
-          !this.canOverwrite(read(entry), contents, old, [`name: ${name}`, '先读取中央说明：'])
+          existsSync(entry.file) &&
+          !this.canOverwrite(read(entry.file), entry.contents, old, entry.markers)
         )
-          throw new Error(`同名管理 skill 已存在或已修改：${entry}`)
-        write(entry, contents)
-        managedSkills.push({ file: entry, hash: hash(contents) })
-        if (id === 'codex') {
-          const policyFile = path.join(this.home, adapter.skillRoot, name, 'agents/openai.yaml')
-          const policy = 'policy:\n  allow_implicit_invocation: false\n'
-          const oldPolicy = manifest?.owned.find((owned) => owned.file === policyFile)
-          // openai.yaml 没有 Ebisu 专属标记，用户可能自行调整策略，只接受内容完全一致或清单原文。
-          if (existsSync(policyFile) && !this.canOverwrite(read(policyFile), policy, oldPolicy, []))
-            throw new Error(`管理 skill 配置冲突：${policyFile}`)
-          write(policyFile, policy)
-          managedSkills.push({ file: policyFile, hash: hash(policy) })
-        }
+          throw new Error(entry.conflict)
+        write(entry.file, entry.contents)
+        managedSkills.push({ file: entry.file, hash: hash(entry.contents) })
       }
       const ruleFile = path.join(this.home, adapter.rule)
       const ruleBefore = read(ruleFile)
@@ -445,12 +470,15 @@ ${end}`
       const hasManagementSkills = managementSkills.every((name) =>
         manifest.owned.some((owned) => owned.file.includes(`/${name}/`))
       )
-      // 受管文件被终端清理或手工删除后，清单与规则仍一致，需要靠这一项触发补装。
-      const missingOwnedFile = manifest.owned.some((owned) => !existsSync(owned.file))
+      // 期望内容以 skillEntries 为准：文件缺失、被手改或应用模板升级都会在这里暴露出来。
+      // 想长期自定义请改 .ebisu/management 下的中央说明；直接改宿主入口文件会被写回受管版本。
+      const entriesOutOfDate = this.skillEntries(id).some(
+        ({ file, contents }) => !existsSync(file) || read(file) !== contents
+      )
       // 规则也属于受管版本：已有管理技能的宿主仍需更新旧的故障判定说明。
       if (
         hasManagementSkills &&
-        !missingOwnedFile &&
+        !entriesOutOfDate &&
         read(manifest.rule).includes(this.ruleText(id))
       )
         continue
