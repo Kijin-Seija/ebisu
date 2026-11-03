@@ -249,7 +249,7 @@ it('chat 客户端：派单、认领竞争、回复、完成标记、绑定会�
     })
   const as = (who: string) => ['--terminal', 'claude', '--member', who]
   try {
-    expect((await run(['--terminal', 'qoder', 'whoami'])).out.member).toMatch(/\/qoder$/)
+    expect((await run(['--terminal', 'qoder', 'whoami'])).out.member).toBe('local-mac/qoder')
     await run(['create', ...as('main'), '--channel', 'bug/S-1', '--title', 'Bug 1'])
     const task = (
       await run(

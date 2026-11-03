@@ -61,10 +61,23 @@ function body(options, required = true) {
   if (required && !text.trim()) fail('missing --body or --body-file')
   return text
 }
-function member(options) {
+/**
+ * 参与者名称默认取 Ebisu 设备名（配对时双方看到的稳定名称），而不是 os.hostname()：
+ * macOS 的 hostname 会随网络变化（如 xxx-45），身份漂移会导致收不到发给自己的消息。
+ */
+async function member(options, runtime) {
   if (typeof options.member === 'string') return options.member
-  const host = os.hostname().replace(/\.local$/, '')
-  return `${host}/${options.terminal || 'agent'}`.replace(/[^A-Za-z0-9._@/:-]/g, '-')
+  let host = os.hostname()
+  try {
+    const self = (await api(runtime, 'GET', '/v1/chat/devices')).devices.find((d) => d.self)
+    if (self?.name) host = self.name
+  } catch {
+    /* 服务不可用时由后续请求报告错误 */
+  }
+  return `${host.replace(/\.local$/, '')}/${options.terminal || 'agent'}`.replace(
+    /[^A-Za-z0-9._@/:-]/g,
+    '-'
+  )
 }
 function api(runtime, method, route, data) {
   return new Promise((resolve, reject) => {
@@ -163,7 +176,7 @@ async function main() {
     return
   }
   const runtime = JSON.parse(fs.readFileSync(String(options.runtime), 'utf8'))
-  const me = member(options)
+  const me = await member(options, runtime)
   let result
   switch (command) {
     case 'whoami':

@@ -545,11 +545,16 @@ function chatBody(args) {
 }
 
 /** 默认参与者名称：短主机名/终端，例如 almondeMac22-Mini/qoder。 */
-function defaultMember(terminal) {
-  const host = require('node:os')
-    .hostname()
-    .replace(/\.local$/, '')
-  return `${host}/${terminal || 'agent'}`.replace(/[^A-Za-z0-9._@/:-]/g, '-')
+/** 默认参与者名称：Ebisu 设备名/终端；hostname 会随网络变化，只作兜底。 */
+async function defaultMember(runtime, terminal) {
+  let host = require('node:os').hostname()
+  const devices = await chatRequest(runtime, 'GET', '/v1/chat/devices', undefined, 5000)
+  const self = devices.ok && devices.devices.find((device) => device.self)
+  if (self && self.name) host = self.name
+  return `${host.replace(/\.local$/, '')}/${terminal || 'agent'}`.replace(
+    /[^A-Za-z0-9._@/:-]/g,
+    '-'
+  )
 }
 
 /**
@@ -558,7 +563,8 @@ function defaultMember(terminal) {
  */
 async function chatMain(args, runtime, terminal) {
   const command = typeof args.chat === 'string' ? args.chat : ''
-  const member = typeof args.member === 'string' ? args.member : defaultMember(terminal)
+  const member =
+    typeof args.member === 'string' ? args.member : await defaultMember(runtime, terminal)
   const list = (value) =>
     typeof value === 'string'
       ? value
