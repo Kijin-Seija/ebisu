@@ -855,3 +855,35 @@ it('chat 客户端 --image：上传后随消息发送，history/inbox 输出本�
     await server.close()
   }
 }, 30000)
+
+it('消息携带或从活跃会话自动推断发送者 model，并随同步复制', () => {
+  const folder = path.join(root, 'repo')
+  mkdirSync(folder, { recursive: true })
+  store.addFolder(folder)
+  store.activity({
+    path: folder,
+    terminal: 'qoder',
+    sessionId: 'sess-qoder-1',
+    action: 'enter',
+    model: 'anthropic/claude-opus-4-6'
+  })
+  chat.createChannel({ id: 'model-test', members: ['local-mac/qoder', 'local-mac/codex'] })
+  const explicit = chat.post({
+    channel: 'model-test',
+    from: 'local-mac/codex',
+    model: 'openai/gpt-5',
+    body: 'explicit model'
+  })
+  expect(explicit.model).toBe('openai/gpt-5')
+  // 未传 model 时，从本机活跃会话自动推断
+  const inferred = chat.post({
+    channel: 'model-test',
+    from: 'local-mac/qoder',
+    body: 'inferred model'
+  })
+  expect(inferred.model).toBe('anthropic/claude-opus-4-6')
+  expect(chat.history('model-test').map((m) => m.model)).toEqual([
+    'openai/gpt-5',
+    'anthropic/claude-opus-4-6'
+  ])
+})

@@ -1,4 +1,10 @@
-import { terminalIconId, type ModelFamily, type SessionActivity } from '../../shared/types'
+import {
+  terminalIconId,
+  terminalIds,
+  type ModelFamily,
+  type SessionActivity,
+  type TerminalId
+} from '../../shared/types'
 
 /** 只识别明确的模型标识，绝不由终端品牌或静态默认配置猜测当前模型。 */
 export function modelFamily(model: string | null): ModelFamily | undefined {
@@ -7,6 +13,37 @@ export function modelFamily(model: string | null): ModelFamily | undefined {
     return 'gpt'
   for (const family of ['claude', 'deepseek', 'kimi', 'qwen', 'gemini', 'grok'] as const) {
     if (new RegExp(`(^|[/\\s:_-])${family}([\\d\\s:/_-]|$)`).test(value)) return family
+  }
+  return undefined
+}
+
+/** 终端未显式上报模型时，聊天头像回退到该终端对应的模型形象。 */
+const terminalDefaultModels: Partial<Record<TerminalId, ModelFamily>> = {
+  codex: 'gpt',
+  claude: 'claude',
+  dsh: 'deepseek',
+  qoder: 'qwen',
+  qodercn: 'qwen',
+  antigravity: 'gemini',
+  grok: 'grok'
+}
+
+/**
+ * 聊天消息发送者头像：优先使用发送者模型对应的模型形象（与设置页中的模型形象配置一致），
+ * 未记录模型时按发送者终端匹配对应模型形象或终端商标。
+ */
+export function chatAvatarUrl(
+  input: { author: string; model?: string | null },
+  revision: number
+): string | undefined {
+  const family = modelFamily(input.model ?? null) ?? modelFamily(input.author)
+  if (family) return `ebisu-asset://avatar/model/${family}?v=${revision}`
+  const tail = input.author.split('/').pop()?.trim().toLowerCase()
+  if (tail && (terminalIds as readonly string[]).includes(tail)) {
+    const terminal = tail as TerminalId
+    const fallbackFamily = terminalDefaultModels[terminal]
+    if (fallbackFamily) return `ebisu-asset://avatar/model/${fallbackFamily}?v=${revision}`
+    return `ebisu-asset://avatar/terminal/${terminalIconId(terminal)}?v=${revision}`
   }
   return undefined
 }

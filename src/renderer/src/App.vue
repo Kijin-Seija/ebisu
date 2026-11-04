@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   darkTheme,
   lightTheme,
@@ -17,7 +17,7 @@ import {
   LayoutGrid,
   BookOpen,
   SlidersHorizontal,
-  ListTodo,
+  MessagesSquare,
   Plus,
   RefreshCw,
   ArrowUpRight
@@ -46,15 +46,7 @@ const dark = computed(
     (dashboard.snapshot?.settings.theme !== 'light' && systemDark.value)
 )
 const folders = computed(() => dashboard.views.folders)
-// 远程执行开关或已有 Agent 对话时显示入口；对话浏览不需要远程执行权限。
-const remoteTasksEnabled = computed(
-  () =>
-    dashboard.snapshot?.lan?.remoteExecution === true ||
-    (dashboard.snapshot?.lan?.chats?.length ?? 0) > 0
-)
-watch(remoteTasksEnabled, (enabled) => {
-  if (!enabled && page.value === 'remote-tasks') page.value = 'settings'
-})
+const chatCount = computed(() => dashboard.snapshot?.lan?.chats?.length ?? 0)
 let unsubscribe: (() => void) | undefined
 onMounted(() => {
   void dashboard.refresh()
@@ -149,12 +141,8 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
                   dashboard.views.skills.length
                 }}</span>
               </button>
-              <button
-                v-if="remoteTasksEnabled"
-                :class="{ active: page === 'remote-tasks' }"
-                @click="page = 'remote-tasks'"
-              >
-                <ListTodo :size="18" />远程任务
+              <button :class="{ active: page === 'remote-tasks' }" @click="page = 'remote-tasks'">
+                <MessagesSquare :size="18" />聊天室<span class="nav-count">{{ chatCount }}</span>
               </button>
               <button :class="{ active: page === 'settings' }" @click="page = 'settings'">
                 <SlidersHorizontal :size="18" />设置
@@ -207,7 +195,7 @@ const themeOverrides = computed<GlobalThemeOverrides>(() => ({
                 <template v-else-if="page === 'skills'">
                   <Skills :tray-mode="trayMode" />
                 </template>
-                <template v-else-if="page === 'remote-tasks' && remoteTasksEnabled">
+                <template v-else-if="page === 'remote-tasks'">
                   <RemoteTasks />
                 </template>
                 <template v-else>

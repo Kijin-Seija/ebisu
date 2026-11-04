@@ -108,6 +108,7 @@ export const postSchema = z
   .object({
     channel: channelIdSchema,
     from: memberSchema,
+    model: z.string().trim().min(1).max(200).nullable().optional(),
     to: memberSchema.nullable().optional(),
     type: typeSchema.optional(),
     body: bodySchema,
@@ -138,6 +139,7 @@ const wireMessage = z
     origin: uuid,
     counter: z.number().int().positive(),
     from: memberSchema,
+    model: z.string().trim().min(1).max(200).optional(),
     to: memberSchema.nullable(),
     type: typeSchema,
     body: bodySchema,
@@ -207,6 +209,8 @@ interface MessageRow {
   receivedAt: number
   /** 附件元数据 JSON；无附件时为 NULL。 */
   attachments: string | null
+  /** 发送者模型标识；未知时为 NULL。 */
+  model: string | null
 }
 interface FileRow {
   channel: string
@@ -335,6 +339,8 @@ export class Chat {
     }[]
     if (!columns.some((column) => column.name === 'attachments'))
       store.db.exec('ALTER TABLE chat_messages ADD COLUMN attachments TEXT')
+    if (!columns.some((column) => column.name === 'model'))
+      store.db.exec('ALTER TABLE chat_messages ADD COLUMN model TEXT')
     this.filesDirectory =
       options.filesDirectory ?? path.join(path.dirname(store.db.name), 'chat-files')
     try {
@@ -538,11 +544,14 @@ export class Chat {
         ).max ?? 0
       const now = Math.max(this.now(), tombstone ? tombstone.deletedAt + 1 : 0)
       const attachments = this.resolveAttachments(data.channel, data.attachments ?? [])
+      const model =
+        data.model ?? this.resolveSenderModel(data.channel, data.from, data.type, data.body)
       const row = this.insert({
         channel: data.channel,
         origin,
         counter: next + 1,
         from: data.from,
+        ...(model ? { model } : {}),
         to: data.to ?? null,
         type: data.type ?? 'text',
         body: data.body,
@@ -882,6 +891,46 @@ export class Chat {
   }
 
   /**
+   * 推断本机发送者当前使用的模型：优先匹配该频道认领绑定的会话 ID，
+   * 其次回退到该终端在本机最近活跃会话上报的模型。
+   */
+  private resolveSenderModel(
+    channel: string,
+    sender: string,
+    type?: string,
+    body?: string
+  ): string | undefined {
+    const terminal = sender.split('/').pop()?.toLowerCase()
+    if (!terminal) return undefined
+    let sessionId = type === 'claim' && body ? parseClaimSession(body) : undefined
+    if (!sessionId) {
+      const claims = this.store.db
+        .prepare(
+          "SELECT body FROM chat_messages WHERE channel=? AND sender=? AND type='claim' ORDER BY seq DESC LIMIT 5"
+        )
+        .all(channel, sender) as { body: string }[]
+      for (const claim of claims) {
+        sessionId = parseClaimSession(claim.body)
+        if (sessionId) break
+      }
+    }
+    if (sessionId) {
+      const bound = this.store.db
+        .prepare(
+          "SELECT model FROM activities WHERE terminal=? AND sessionId=? AND model IS NOT NULL AND model != '' ORDER BY lastSeen DESC LIMIT 1"
+        )
+        .get(terminal, sessionId) as { model: string } | undefined
+      if (bound?.model) return bound.model
+    }
+    const latest = this.store.db
+      .prepare(
+        "SELECT model FROM activities WHERE terminal=? AND model IS NOT NULL AND model != '' ORDER BY active DESC, lastSeen DESC LIMIT 1"
+      )
+      .get(terminal) as { model: string } | undefined
+    return latest?.model
+  }
+
+  /**
    * 写入一条消息；已存在（同一来源计数）时返回 null。
    * 带附件时同时登记频道图片引用：本机缺失的文件由 LAN 层按 missingFiles 异步拉取。
    */
@@ -890,8 +939,8 @@ export class Chat {
     const result = this.store.db
       .prepare(
         `INSERT OR IGNORE INTO chat_messages
-         (channel, origin, counter, sender, recipient, type, body, replyTo, clientId, createdAt, receivedAt, attachments)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+         (channel, origin, counter, sender, recipient, type, body, replyTo, clientId, createdAt, receivedAt, attachments, model)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         message.channel,
@@ -905,7 +954,8 @@ export class Chat {
         message.clientId,
         message.createdAt,
         this.now(),
-        attachments.length ? JSON.stringify(attachments) : null
+        attachments.length ? JSON.stringify(attachments) : null,
+        message.model ?? null
       )
     if (!result.changes) return null
     const link = this.store.db.prepare('INSERT OR IGNORE INTO chat_files VALUES(?,?,?,?,?)')
@@ -1173,6 +1223,7 @@ function messageFromRow(row: MessageRow): Omit<ChatMessage, 'attachments'> {
     origin: row.origin,
     counter: row.counter,
     from: row.sender,
+    ...(row.model ? { model: row.model } : {}),
     to: row.recipient,
     type: row.type,
     body: row.body,
@@ -1195,6 +1246,7 @@ function wireOf(message: ChatMessage): ChatPush['messages'][number] {
     origin: message.origin,
     counter: message.counter,
     from: message.from,
+    ...(message.model ? { model: message.model } : {}),
     to: message.to,
     type: message.type,
     body: message.body,
@@ -1202,6 +1254,14 @@ function wireOf(message: ChatMessage): ChatPush['messages'][number] {
     clientId: message.clientId,
     createdAt: message.createdAt,
     ...(attachments.length ? { attachments } : {})
+  }
+}
+function parseClaimSession(body: string): string | undefined {
+  try {
+    const session = JSON.parse(body)?.session
+    return typeof session === 'string' && session.trim() ? session.trim() : undefined
+  } catch {
+    return undefined
   }
 }
 function wireFromRow(row: MessageRow): ChatPush['messages'][number] {

@@ -25,6 +25,8 @@ export interface ChatMessage {
   /** 来源设备在该频道内的连续计数，从 1 开始，用于版本向量补齐。 */
   counter: number
   from: string
+  /** 发送者使用的模型标识（如 claude-opus-4-6、gpt-5 等）；未知或未记录时省略。 */
+  model?: string
   to: string | null
   type: string
   body: string

@@ -122,6 +122,8 @@ function bodyWith(options, attachments) {
   return text.trim() ? text : '[图片]'
 }
 const withAttachments = (attachments) => (attachments.length ? { attachments } : {})
+const withModel = (options) =>
+  typeof options.model === 'string' && options.model.trim() ? { model: options.model.trim() } : {}
 
 /**
  * 参与者名称默认取 Ebisu 设备名（配对时双方看到的稳定名称），而不是 os.hostname()：
@@ -275,6 +277,7 @@ async function main() {
         to,
         type: typeof options.type === 'string' ? options.type : 'task',
         body: bodyWith(options, attachments),
+        ...withModel(options),
         ...withAttachments(attachments)
       })
       break
@@ -319,7 +322,8 @@ async function main() {
         from: me,
         type: 'claim',
         replyTo: id,
-        body: JSON.stringify({ session })
+        body: JSON.stringify({ session }),
+        ...withModel(options)
       })
       const messages = await history(runtime, channel)
       const state = stateOf(messages, me, id, Infinity, Date.now())
@@ -337,6 +341,7 @@ async function main() {
         type: 'progress',
         replyTo: id,
         body: bodyWith(options, attachments),
+        ...withModel(options),
         ...withAttachments(attachments)
       })
       break
@@ -362,6 +367,7 @@ async function main() {
         replyTo: id,
         body:
           command === 'reply' ? bodyWith(options, attachments) : body(options, false) || '已处理',
+        ...withModel(options),
         ...withAttachments(attachments)
       })
       break

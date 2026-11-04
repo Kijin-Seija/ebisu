@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 import {
   avatarUrl,
   backgroundUrl,
+  chatAvatarUrl,
   modelFamily,
   trayBackgroundUrl
 } from '../src/renderer/src/avatars'
@@ -44,4 +45,31 @@ it('会话头像固定使用终端商标，卡片背景只使用已识别模型�
   )
   expect(trayBackgroundUrl(session({ model: null }), 2)).toBeUndefined()
   expect(trayBackgroundUrl(session({ model: 'mygpt-proxy' }), 2)).toBeUndefined()
+})
+it('聊天头像使用发送者模型对应的模型形象，未记录模型时回退到终端默认模型或商标', () => {
+  expect(
+    chatAvatarUrl({ author: 'almon-mini/qoder', model: 'anthropic/claude-opus-4-6' }, 3)
+  ).toBe('ebisu-asset://avatar/model/claude?v=3')
+  expect(chatAvatarUrl({ author: 'almon-mini/qoder', model: 'openai/gpt-5' }, 3)).toBe(
+    'ebisu-asset://avatar/model/gpt?v=3'
+  )
+  expect(chatAvatarUrl({ author: 'almon-mini/qoder' }, 3)).toBe(
+    'ebisu-asset://avatar/model/qwen?v=3'
+  )
+  expect(chatAvatarUrl({ author: 'macbook/claude' }, 3)).toBe(
+    'ebisu-asset://avatar/model/claude?v=3'
+  )
+  expect(chatAvatarUrl({ author: 'macbook/dsh' }, 3)).toBe(
+    'ebisu-asset://avatar/model/deepseek?v=3'
+  )
+  expect(chatAvatarUrl({ author: 'macbook/codex' }, 3)).toBe(
+    'ebisu-asset://avatar/model/gpt?v=3'
+  )
+  expect(chatAvatarUrl({ author: 'macbook/antigravity' }, 3)).toBe(
+    'ebisu-asset://avatar/model/gemini?v=3'
+  )
+  expect(chatAvatarUrl({ author: 'macbook/workbuddy' }, 3)).toBe(
+    'ebisu-asset://avatar/terminal/workbuddy?v=3'
+  )
+  expect(chatAvatarUrl({ author: 'unknown/agent' }, 3)).toBeUndefined()
 })

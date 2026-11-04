@@ -71,23 +71,7 @@ async function request(device: NearbyDevice) {
         @update:value="(value: boolean) => run(() => api.configureLan(value, name))"
       />
     </div>
-    <p class="section-meta lan-intro">
-      配对后可互相查看项目状态和技能；远程 Agent 任务在侧边栏单独管理。
-    </p>
-    <div class="lan-remote-execution">
-      <div class="section-heading">
-        <h3>远程 Agent 任务</h3>
-        <n-switch
-          :value="dashboard.snapshot.lan.remoteExecution"
-          :disabled="busy"
-          aria-label="允许远程 Agent 自动执行"
-          @update:value="(value: boolean) => run(() => api.configureRemoteExecution(value))"
-        />
-      </div>
-      <p class="section-meta lan-warning">
-        开启后，已配对设备可以在本机任意绝对路径自动启动任务。请只与可信设备配对。
-      </p>
-    </div>
+    <p class="section-meta lan-intro">配对后可互相查看项目状态、技能与聊天室会话。</p>
     <label class="lan-name-label" for="lan-device-name">本机名称</label>
     <div class="lan-name-row">
       <n-input

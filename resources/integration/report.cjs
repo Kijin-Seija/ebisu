@@ -602,6 +602,9 @@ async function chatMain(args, runtime, terminal) {
         {
           channel: args.channel,
           from: member,
+          ...(typeof args.model === 'string' && args.model.trim()
+            ? { model: args.model.trim() }
+            : {}),
           ...(typeof args.to === 'string' ? { to: args.to } : {}),
           ...(typeof args.type === 'string' ? { type: args.type } : {}),
           ...(typeof args['reply-to'] === 'string' ? { replyTo: args['reply-to'] } : {}),
