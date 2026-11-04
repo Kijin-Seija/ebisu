@@ -22,7 +22,7 @@ Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；�
   claim   --channel <id> --id <messageId> [--session <sessionId>]
                                            认领一条消息并绑定处理会话；返回 won=false 表示已被本参与者的其他会话抢先认领
   progress --channel <id> --id <messageId> (--body t | --body-file -) [--image <file>]...
-                                           处理中进展，同时刷新认领
+                                           处理中进展，同时刷新认领（不进入对方 inbox；需要对方决策时用 reply）
   reply   --channel <id> --id <messageId> [--type result] (--body t | --body-file -) [--image <file>]...
                                            回复原发送者并标记该消息已处理
   done    --channel <id> --id <messageId> [--body t]                   不回复对方，仅标记已处理
@@ -30,6 +30,8 @@ Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；�
   binding --channel <id>                   本参与者在该频道最近绑定的会话
   delete  --channel <id>                   删除频道及全部消息；本机与其他持有副本的设备都会删除
 认领、进展和完成标记都通过 replyTo 指向原消息；inbox 只依据对话内容计算，可在任意会话重复调用。
+身份继承：progress / reply / done 未显式传 --member 时，若原消息发给本设备上的另一参与者且已被其认领，
+  自动以该认领者身份发出（处理会话与轮询会话的 --terminal 不一致时也能回到同一参与者）；输出带 member 字段。
 图片：--image 可重复，每条消息最多 4 张，仅 PNG/JPEG/GIF/WebP（按文件内容识别），单张不超过 4 MiB；
   只有图片时正文可省略。history / inbox 中的消息带 attachments[]：{hash,name,mime,size,path}，
   path 为本机图片绝对路径，可直接读取查看；对端图片尚未同步完成时 path 为 null 且 pending:true，稍后重试。
@@ -196,6 +198,23 @@ const history = async (runtime, channel, limit = 2000) =>
   ).messages
 const post = (runtime, message) => api(runtime, 'POST', '/v1/chat/messages', message)
 
+/** 参与者名称的设备部分（`设备名/终端` 中 `/` 之前），用于判断是否同一台设备。 */
+const deviceOf = (name) => String(name).split('/')[0]
+/**
+ * 处理会话回复时使用的参与者身份。
+ * 轮询会话以 ME 认领后把任务派给处理会话；处理会话可能以不同的 --terminal（或缺省的 agent）运行，
+ * 若直接用自身名称回复，结果会发自另一个参与者，对方的后续回复也会路由错。
+ * 规则：显式 --member 优先；否则当原消息发给本设备上的另一参与者、且该参与者已认领这条消息时，沿用该参与者。
+ * 其他设备的参与者或未被认领的消息不继承，避免冒用。
+ */
+function senderFor(messages, me, id, explicit) {
+  if (explicit) return me
+  const original = messages.find((m) => m.id === id)
+  const owner = original?.to
+  if (!owner || owner === me || deviceOf(owner) !== deviceOf(me)) return me
+  const claimed = messages.some((m) => m.from === owner && m.type === 'claim' && m.replyTo === id)
+  return claimed ? owner : me
+}
 /** 本参与者针对某条消息的状态：已处理、有效认领（含绑定会话）或未处理。 */
 function stateOf(messages, me, id, staleMs, now) {
   const mine = messages.filter((m) => m.from === me && m.replyTo === id)
@@ -334,29 +353,35 @@ async function main() {
     case 'progress': {
       const channel = need(options, 'channel')
       const id = need(options, 'id')
+      const messages = await history(runtime, channel)
+      if (!messages.some((m) => m.id === id)) fail('message not found')
+      const from = senderFor(messages, me, id, typeof options.member === 'string')
       const attachments = await images(options, runtime, channel)
       result = await post(runtime, {
         channel,
-        from: me,
+        from,
         type: 'progress',
         replyTo: id,
         body: bodyWith(options, attachments),
         ...withModel(options),
         ...withAttachments(attachments)
       })
+      result = { ...result, member: from }
       break
     }
     case 'reply':
     case 'done': {
       const channel = need(options, 'channel')
       const id = need(options, 'id')
-      const original = (await history(runtime, channel)).find((m) => m.id === id)
+      const messages = await history(runtime, channel)
+      const original = messages.find((m) => m.id === id)
       if (!original) fail('message not found')
+      const from = senderFor(messages, me, id, typeof options.member === 'string')
       // done 只是完成标记，不携带图片。
       const attachments = command === 'reply' ? await images(options, runtime, channel) : []
       result = await post(runtime, {
         channel,
-        from: me,
+        from,
         ...(command === 'reply' ? { to: original.from } : {}),
         type:
           command === 'reply'
@@ -370,6 +395,7 @@ async function main() {
         ...withModel(options),
         ...withAttachments(attachments)
       })
+      result = { ...result, member: from }
       break
     }
     case 'history':
@@ -402,4 +428,4 @@ if (require.main === module)
     )
     process.exitCode = 1
   })
-module.exports = { stateOf, bindingOf }
+module.exports = { stateOf, bindingOf, senderFor }

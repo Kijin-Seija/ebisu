@@ -356,6 +356,104 @@ it('chat 客户端：派单、认领竞争、回复、完成标记、绑定会�
   }
 }, 30000)
 
+it('chat 客户端：处理会话未传 --member 时沿用本设备认领者身份回复', async () => {
+  const runtimeFile = path.join(root, 'runtime.json')
+  const server = await startServer(store, runtimeFile, () => {}, undefined, chat)
+  const cli = path.join(__dirname, '../resources/integration/chat.cjs')
+  const run = (args: string[], input?: string) =>
+    new Promise<{ code: number; out: Record<string, any> }>((resolve, reject) => {
+      const child = spawn(process.execPath, [cli, '--runtime', runtimeFile, ...args], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      })
+      let out = ''
+      child.stdout.on('data', (chunk) => (out += chunk))
+      child.once('error', reject)
+      child.once('close', (code) => resolve({ code: code ?? 0, out: JSON.parse(out) }))
+      child.stdin.end(input ?? '')
+    })
+  const main = ['--terminal', 'claude', '--member', 'ctl/claude']
+  try {
+    await run(['create', ...main, '--channel', 'bug/S-9'])
+    const send = async (to: string, body: string) =>
+      (await run(['send', ...main, '--channel', 'bug/S-9', '--to', to, '--body', body])).out.message
+    const task = await send('local-mac/dsh', '修复 S-9')
+    // 轮询会话以 --terminal dsh 认领
+    expect(
+      (
+        await run([
+          '--terminal',
+          'dsh',
+          'claim',
+          '--channel',
+          'bug/S-9',
+          '--id',
+          task.id,
+          '--session',
+          'sub-1'
+        ])
+      ).out.won
+    ).toBe(true)
+    // 处理会话（子会话）没有 --terminal，自身身份是 local-mac/agent
+    expect((await run(['whoami'])).out.member).toBe('local-mac/agent')
+    const progress = await run(['progress', '--channel', 'bug/S-9', '--id', task.id, '--body', 'x'])
+    expect(progress.out).toMatchObject({ member: 'local-mac/dsh' })
+    expect(progress.out.message.from).toBe('local-mac/dsh')
+    const reply = (
+      await run(['reply', '--channel', 'bug/S-9', '--id', task.id, '--body', '需要主控决策'])
+    ).out
+    expect(reply.member).toBe('local-mac/dsh')
+    expect(reply.message).toMatchObject({ from: 'local-mac/dsh', to: 'ctl/claude' })
+    // 原消息对轮询身份而言已处理；主控的后续回复进入 /dsh 的 inbox
+    expect((await run(['--terminal', 'dsh', 'inbox'])).out.tasks).toEqual([])
+    const approve = (
+      await run([
+        'reply',
+        ...main,
+        '--channel',
+        'bug/S-9',
+        '--id',
+        reply.message.id,
+        '--type',
+        'approve',
+        '--body',
+        'ok'
+      ])
+    ).out.message
+    expect(approve.to).toBe('local-mac/dsh')
+    const inbox = (await run(['--terminal', 'dsh', 'inbox'])).out
+    expect(inbox.tasks.map((t: { id: string }) => t.id)).toEqual([approve.id])
+    expect(inbox.tasks[0].binding.session).toBe('sub-1')
+    expect((await run(['inbox'])).out.tasks).toEqual([])
+    // 未被认领的消息不继承；显式 --member 不被改写；其他设备的参与者不继承
+    const unclaimed = await send('local-mac/dsh', '未认领')
+    expect((await run(['done', '--channel', 'bug/S-9', '--id', unclaimed.id])).out.member).toBe(
+      'local-mac/agent'
+    )
+    const explicit = await send('local-mac/qoder', '显式')
+    await run(['--terminal', 'qoder', 'claim', '--channel', 'bug/S-9', '--id', explicit.id])
+    expect(
+      (
+        await run([
+          'done',
+          '--member',
+          'local-mac/other',
+          '--channel',
+          'bug/S-9',
+          '--id',
+          explicit.id
+        ])
+      ).out.member
+    ).toBe('local-mac/other')
+    const remote = await send('peer-mac/dsh', '其他设备')
+    await run(['claim', '--member', 'peer-mac/dsh', '--channel', 'bug/S-9', '--id', remote.id])
+    expect((await run(['done', '--channel', 'bug/S-9', '--id', remote.id])).out.member).toBe(
+      'local-mac/agent'
+    )
+  } finally {
+    await server.close()
+  }
+}, 30000)
+
 it('本机删除频道：清除频道、消息与游标，写入删除标记并推送', async () => {
   const pushes: { devices: string[]; payload: ChatPush }[] = []
   const peer = randomUUID()

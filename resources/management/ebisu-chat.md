@@ -33,16 +33,21 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 3. 处理完成后由**处理该消息的会话**回复：
    `CHAT reply --channel C --id ID [--type result] --body-file - <<'EOF'` … `EOF`
    回复会发给原发送者并把该消息标记为已处理。只需标记、不必回复时用 `CHAT done --channel C --id ID`。长任务中途可用 `CHAT progress --channel C --id ID --body "…"` 汇报进展，它同时刷新认领，避免被当作超时。
-4. “处理消息”提示必须自带完整上下文，因为接收会话可能没有之前的记忆：
+   - **处理会话必须以认领者身份 `ME` 发言**：`reply`/`progress`/`done` 都加 `--member ME`。否则处理会话（例如 DSH 子会话、未带 `--terminal` 的会话）会以 `主机/agent` 等其他身份发出，对方的后续回复（approve、审核意见）会路由给错误的参与者，轮询收不到。客户端在未传 `--member` 时也会尝试沿用本设备上已认领该消息的参与者（输出的 `member` 字段即实际身份），但提示里仍要显式写出。
+   - **`progress` 只是进展与心跳，不会进入对方 inbox**。需要对方（主控）决策、批准或回答问题时，不要用 `progress` 提问：用 `CHAT reply --channel C --id ID --type result --member ME` 发给原发送者，正文首行写“需要决策：…”并列出选项，然后结束本轮等待；对方的回复会作为新消息进入 `ME` 的 inbox，并派回同一个绑定会话。
+4. “处理消息”提示必须自带完整上下文，因为接收会话可能没有之前的记忆。提示中的 `CHAT` 要展开为**完整命令**（含客户端路径与 `--terminal`），`ME`、`C`、`ID` 等都替换为实际值：
 
    ```
    你是 ME。请处理 Ebisu 对话频道 C 中来自 FROM 的消息 ID（类型 TYPE）：
    ---
    消息正文
    ---
-   需要上下文时运行：CHAT history --channel C
+   chat 客户端：CHAT（本会话所有 chat 命令都必须加 --member ME，保证以 ME 身份发言）
+   需要上下文时运行：CHAT history --channel C --member ME
    本消息已由轮询会话认领并绑定到你（会话 SESSION），不要再执行 claim。
-   完成后必须运行：CHAT reply --channel C --id ID --type result --body-file -（正文写结论、分支/提交、验证结果；需要写会话 ID 时写 SESSION，不要写 local- 开头的上报 ID）
+   中途汇报进展：CHAT progress --channel C --id ID --member ME --body "…"（progress 不会进入对方 inbox，不能用来提问）
+   需要 FROM 决策/批准时：CHAT reply --channel C --id ID --type result --member ME --body-file -（正文首行写“需要决策：…”并列出选项），然后结束本轮，等待对方回复派回本会话
+   完成后必须运行：CHAT reply --channel C --id ID --type result --member ME --body-file -（正文写结论、分支/提交、验证结果；需要写会话 ID 时写 SESSION，不要写 local- 开头的上报 ID）
    ```
 
 ## 三、各终端的具体做法
@@ -59,7 +64,8 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 ### DeepSeek Harness（dsh）
 
 - 定时任务：`schedule_create`，`every_seconds: 120`（最小 60）。提醒投递回创建它的会话，因此轮询始终在同一会话中运行。
-- **轮询会话是纯路由**：只做 `inbox`、`claim`、`subagent`/`send_message`（以及必要的 `reply/done`），不在轮询会话内处理任务内容、不运行长命令、不做状态轮询、不等待处理结果、不使用 `ask_user_question`。需要人决策时，由处理会话在频道内回复 `type=error`/提问，或交主控；轮询会话结束本轮。
+- **轮询会话是纯路由**：只做 `inbox`、`claim`、`subagent`/`send_message`（以及必要的 `reply/done`），不在轮询会话内处理任务内容、不运行长命令、不做状态轮询、不等待处理结果、不使用 `ask_user_question`。需要人决策时，由处理会话按第 3 步用 `reply --type result --member ME` 向原发送者（通常是主控）提问；轮询会话结束本轮。
+- 子会话里 `CHAT whoami` 可能得到 `主机/agent`（子会话不继承轮询会话的 `--terminal`），所以第 4 步提示里的每条 chat 命令都必须带 `--member ME`。
 - **一个终端（ME）只保留一个轮询会话和一个 `ebisu-chat:ME` 定时任务**：DSH 的 `schedule_list` 只列当前会话，发现不了其他会话注册的同名任务；重复注册会出现两个 poller 抢消息、互相覆盖频道绑定。切换轮询会话前先删除旧定时任务。
 - 新建处理会话：内置 `subagent`（入参 `description` 3–5 词、`prompt` 为第 4 步提示、可选 `cwd` 为项目目录）；返回 `started subagent <uuid>`。**用这个 uuid `claim`**——它是之后 `send_message` 的 `agent_id`；不要用子会话里的 `$DSH_SESSION_ID`（部分 DSH 版本中它等于父会话 ID）。注意 `cwd` 只改工作目录，不改会话 workspace/sandbox；处理会话继承轮询会话的 workspace，跨项目频道需轮询会话本身对目标目录可写。
 - 投递到绑定会话：`send_message`（`agent_id` 为绑定会话 ID）。只能发给本轮询会话的**直接子会话**；绑定会话不是当前轮询会话的直接子会话（轮询会话重建/换会话/已归档）时，按“绑定会话不可用”重新 `subagent` 新建，并在提示词里带 `CHAT history --channel C` 摘要。委派深度为 1，处理会话不能再建子会话。
