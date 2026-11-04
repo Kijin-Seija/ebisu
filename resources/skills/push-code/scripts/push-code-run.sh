@@ -160,8 +160,10 @@ cmd_push() {
         record_post_rebase_state "$(git rev-parse HEAD)"
       fi
       return 0
+    else
+      # 必须在 else 分支内取退出码：if 语句结束后 $? 恒为 0，旧写法会把 push 失败当成功退出。
+      status=$?
     fi
-    status=$?
   else
     if git push ${push_mode:+${push_mode}} --set-upstream "${PUSH_CODE_GIT_REMOTE}" "${branch}"; then
       if [[ "${push_mode}" == "--force-with-lease" ]]; then
@@ -171,8 +173,10 @@ cmd_push() {
         record_post_rebase_state "$(git rev-parse HEAD)"
       fi
       return 0
+    else
+      # 必须在 else 分支内取退出码：if 语句结束后 $? 恒为 0，旧写法会把 push 失败当成功退出。
+      status=$?
     fi
-    status=$?
   fi
   cat >&2 <<'EOF'
 错误: git push 失败。

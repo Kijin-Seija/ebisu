@@ -970,3 +970,46 @@ it('经验复制到本机其他技能：技能级与项目级映射、重复跳�
     ])
   ).toThrow()
 })
+
+it('内置 push-code：git push 被 pre-push 拦截时以非零退出码失败', async () => {
+  const script = path.join(__dirname, '../resources/skills/push-code/scripts/push-code-run.sh')
+  const git = (cwd: string, ...args: string[]) =>
+    execute('git', args, { cwd, env: { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: '1' } })
+  const remote = path.join(root, 'remote.git')
+  const work = path.join(root, 'work')
+  await execute('git', ['init', '-q', '--bare', remote])
+  await execute('git', ['init', '-q', '-b', 'feature', work])
+  await git(
+    work,
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@t',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'x'
+  )
+  await git(work, 'remote', 'add', 'origin', remote)
+  mkdirSync(path.join(work, '.git', 'hooks'), { recursive: true })
+  writeFileSync(path.join(work, '.git', 'hooks', 'pre-push'), '#!/bin/sh\nexit 1\n', {
+    mode: 0o755
+  })
+  const failed = await execute('bash', [script, 'push'], {
+    cwd: work,
+    env: {
+      ...process.env,
+      HOME: home,
+      GIT_CONFIG_NOSYSTEM: '1',
+      EBISU_PROJECT_ROOT: work,
+      PUSH_CODE_TARGET_BRANCH: 'main'
+    }
+  }).then(
+    () => null,
+    (error: { code?: number; stderr?: string }) => error
+  )
+  expect(failed?.code).not.toBe(0)
+  expect(failed?.code).toBeTruthy()
+  expect(failed?.stderr).toContain('git push 失败')
+})
