@@ -637,3 +637,117 @@ it('Agent 对话：未配对证书无法访问对话接口', async () => {
   const response = await raw(stranger, a.lan.view().port!, '/lan/v1/chat/sync')
   expect(response.status).toBe(401)
 })
+
+/** 以指定设备证书直接 POST JSON，用于验证未配对证书无法写入。 */
+function postJson(client: Device, port: number, route: string, body: unknown) {
+  const identity = JSON.parse(
+    readFileSync(path.join(client.directory, 'lan-identity.json'), 'utf8')
+  )
+  const encoded = JSON.stringify(body)
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const req = request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path: route,
+        method: 'POST',
+        key: identity.private,
+        cert: identity.cert,
+        rejectUnauthorized: false,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(encoded)
+        },
+        timeout: 5000
+      },
+      (res) => {
+        let text = ''
+        res.on('data', (chunk) => (text += chunk))
+        res.on('end', () => resolve({ status: res.statusCode!, body: text }))
+      }
+    )
+    req.once('error', reject)
+    req.end(encoded)
+  })
+}
+it('经验复制到已配对设备：项目映射到对端项目、重复跳过、未配对拒绝、项目不存在整批不写', async () => {
+  const a = await make()
+  const b = await make()
+  const stranger = await make()
+  for (const device of [a, b]) mkdirSync(path.join(device.directory, 'shared-project'))
+  const sourceFolder = a.store.addFolder(path.join(a.directory, 'shared-project'))
+  const targetFolder = b.store.addFolder(path.join(b.directory, 'shared-project'))
+  const source = a.skills.create(pkg(), 'source')
+  const target = b.skills.create(pkg('target-tool'), 'target')
+  const general = a.skills.addExperience({
+    skillId: source.id,
+    content: '远程通用经验',
+    evidence: '已验证'
+  })
+  const scoped = a.skills.addExperience({
+    skillId: source.id,
+    folderId: sourceFolder.id,
+    content: '远程项目经验',
+    evidence: '项目内验证'
+  })
+  await pair(a, b)
+  await start(stranger, 'Stranger')
+  const request = {
+    ids: [general.id, scoped.id],
+    targetDeviceId: b.lan.device().id,
+    targetSkillId: target.id,
+    folderMap: { [sourceFolder.id]: targetFolder.id }
+  }
+  expect(await a.lan.copyExperiences(request)).toEqual({ added: 2, skipped: 0 })
+  const copied = b.skills.detail(target.id).experiences
+  expect(copied.map((item) => [item.content, item.folderId]).sort()).toEqual([
+    ['远程通用经验', null],
+    ['远程项目经验', targetFolder.id]
+  ])
+  expect(copied.find((item) => item.folderId === null)!.evidence).toBe(
+    `已验证\n（复制自 Computer A/remote-tool 经验 ${general.id}）`
+  )
+  // 重复复制幂等。
+  expect(await a.lan.copyExperiences(request)).toEqual({ added: 0, skipped: 2 })
+  // 目标项目在接收端不存在：整批 404，不写入任何条目。
+  await expect(
+    a.lan.copyExperiences({
+      ...request,
+      ids: [general.id, scoped.id],
+      folderMap: { [sourceFolder.id]: '00000000-0000-4000-8000-000000000000' }
+    })
+  ).rejects.toThrow('项目不存在')
+  await expect(
+    a.lan.copyExperiences({
+      ...request,
+      targetSkillId: '00000000-0000-4000-8000-000000000000'
+    })
+  ).rejects.toThrow('技能不存在')
+  expect(b.skills.detail(target.id).experiences).toHaveLength(2)
+  // 未配对证书无法写入；已配对但请求体非法时整批 400。
+  const route = `/lan/v1/skills/${target.id}/experiences`
+  const body = { experiences: [{ content: '陌生人', evidence: '伪造', folderId: null }] }
+  expect((await postJson(stranger, b.lan.view().port!, route, body)).status).toBe(401)
+  expect(
+    (
+      await postJson(a, b.lan.view().port!, route, {
+        experiences: [{ content: 'x', evidence: 'y', folderId: null, extra: 1 }]
+      })
+    ).status
+  ).toBe(400)
+  expect(
+    (
+      await postJson(a, b.lan.view().port!, route, {
+        experiences: Array.from({ length: 101 }, (_, i) => ({
+          content: `c${i}`,
+          evidence: 'e',
+          folderId: null
+        }))
+      })
+    ).status
+  ).toBe(400)
+  expect(b.skills.detail(target.id).experiences).toHaveLength(2)
+  // 对端离线时给出明确错误。
+  at += 16000
+  await expect(a.lan.copyExperiences(request)).rejects.toThrow('离线')
+})

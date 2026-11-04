@@ -48,6 +48,7 @@ import markdown from 'highlight.js/lib/languages/markdown'
 import { useDashboard } from '../store'
 import DeviceFilter from './DeviceFilter.vue'
 import RemoteSkill from './RemoteSkill.vue'
+import CopyExperiences from './CopyExperiences.vue'
 import type { SkillView } from '../device-views'
 import { terminalIconId, terminalNames } from '../../../shared/types'
 import type {
@@ -88,6 +89,8 @@ const file = ref('SKILL.md')
 const fileOpen = ref(false)
 const variableContent = ref<HTMLElement | null>(null)
 const selectedIds = ref<string[]>([])
+/** “复制到技能…”对话框；只在本机技能详情中可用，远程技能不提供经验读取。 */
+const copyOpen = ref(false)
 const variables = ref<VariableView[]>([])
 const drafts = ref<Record<string, string>>({})
 const persisted = ref<Record<string, string | undefined>>({})
@@ -320,6 +323,7 @@ watch(selected, () => {
   file.value = 'SKILL.md'
   fileOpen.value = false
   selectedIds.value = []
+  copyOpen.value = false
   void refreshDetail()
   void refreshVariables()
 })
@@ -665,6 +669,12 @@ onBeforeUnmount(() => {
   </div>
   <DeviceFilter />
   <RemoteSkill :skill="remoteSelected" @close="remoteSelected = null" />
+  <CopyExperiences
+    :show="copyOpen && !!detail"
+    :source="detail"
+    :ids="selectedIds"
+    @close="copyOpen = false"
+  />
   <div v-if="skills.length" class="skill-grid">
     <button
       v-for="skill in skills"
@@ -838,6 +848,12 @@ onBeforeUnmount(() => {
                     )
                   "
                   >复制讨论指令</n-button
+                >
+                <n-button
+                  :disabled="!selectedIds.length"
+                  data-copy-experiences-button
+                  @click="copyOpen = true"
+                  >复制到技能…</n-button
                 >
               </div>
               <n-empty

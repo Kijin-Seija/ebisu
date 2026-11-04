@@ -18,8 +18,9 @@ import type {
   SharedSnapshot,
   SkillExport
 } from '../shared/lan'
+import type { ExperienceCopyRequest, ExperienceCopyResult } from '../shared/skills'
 import { activityPhases, terminalIds } from '../shared/types'
-import { packageSchema, SkillError, type Skills } from './skills'
+import { experienceItemsSchema, packageSchema, SkillError, type Skills } from './skills'
 import type { Store } from './database'
 import { SkillTransfer, packageHash } from './skill-transfer'
 import { RemoteCommands, isRemoteCommandTerminal } from './remote-commands'
@@ -205,7 +206,7 @@ export class Lan {
   private now: () => number
   constructor(
     private store: Store,
-    skills: Skills,
+    private readonly skills: Skills,
     private options: Options
   ) {
     this.now = options.now ?? Date.now
@@ -533,6 +534,21 @@ export class Lan {
                 : this.commands.getForSource(commandMatch[1], peer.device.id)
               if (!command) throw new SkillError(404, '任务不存在')
               send(200, command)
+              return
+            }
+            // 已配对设备写入经验：整批校验并在接收端事务中写入，日志与错误中不回显经验全文。
+            const experienceMatch = /^\/lan\/v1\/skills\/([a-f0-9-]{36})\/experiences$/.exec(url)
+            if (experienceMatch && req.method === 'POST') {
+              const data = z
+                .object({ experiences: experienceItemsSchema })
+                .strict()
+                .parse(await readJson(MAX_BODY))
+              const result = this.skills.importExperiences(
+                z.string().uuid().parse(experienceMatch[1]),
+                data.experiences
+              )
+              send(200, result)
+              if (result.added) this.options.changed()
               return
             }
             if (req.method !== 'GET') throw new SkillError(404, '接口不存在')
@@ -1080,6 +1096,52 @@ export class Lan {
     if (exported.skillId !== skillId || packageHash(exported.package) !== exported.hash)
       throw new SkillError(400, '技能包校验失败')
     return exported
+  }
+  /**
+   * 复制经验到目标技能：目标是本机（null 或本机设备 ID）时直接写库，
+   * 否则整理条目后通过 mTLS 写入已配对且在线的设备。
+   */
+  async copyExperiences(input: ExperienceCopyRequest): Promise<ExperienceCopyResult> {
+    const request = z
+      .object({
+        ids: z.array(z.string().uuid()).min(1).max(100),
+        targetDeviceId: z.string().uuid().nullable(),
+        targetSkillId: z.string().uuid(),
+        folderMap: z.record(z.string().uuid(), z.string().uuid())
+      })
+      .strict()
+      .parse(input)
+    if (!request.targetDeviceId || request.targetDeviceId === this.identity.id)
+      return this.skills.copyExperiences(request, this.identity.name)
+    return this.copyExperiencesToPeer(request.targetDeviceId, request)
+  }
+  async copyExperiencesToPeer(
+    deviceId: string,
+    input: { ids: string[]; targetSkillId: string; folderMap: Record<string, string> }
+  ): Promise<ExperienceCopyResult> {
+    const peer = this.peers.get(z.string().uuid().parse(deviceId))
+    if (!this.enabled || !peer) throw new SkillError(401, '设备未连接')
+    if (!this.online(peer))
+      throw new SkillError(409, `目标设备 ${peer.device.name} 离线，无法复制经验`)
+    const skillId = z.string().uuid().parse(input.targetSkillId)
+    const experiences = this.skills.prepareExperienceCopy(input, this.identity.name)
+    let response: { body: unknown }
+    try {
+      response = await this.fetch(
+        peer.address,
+        peer.fingerprint,
+        `/lan/v1/skills/${skillId}/experiences`,
+        { experiences }
+      )
+    } catch (error) {
+      // 旧版本对端没有该路由，会在“非 GET 请求”分支返回 404 接口不存在。
+      if (error instanceof LanHttpError && error.status === 404 && error.message === '接口不存在')
+        throw new SkillError(426, '对方 Ebisu 版本过旧，请升级')
+      throw error
+    }
+    return z
+      .object({ added: z.number().int().min(0), skipped: z.number().int().min(0) })
+      .parse(response.body)
   }
   async configureRemoteExecution(enabled: boolean): Promise<void> {
     this.commands.setEnabled(enabled)

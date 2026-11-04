@@ -16,6 +16,8 @@ import { adapters, terminalNames } from './terminal-adapters'
 import { FileChanges, safeFile } from './skill-files'
 import { terminalIds, type TerminalId } from '../shared/types'
 import type {
+  ExperienceCopyItem,
+  ExperienceCopyResult,
   SkillDetail,
   SkillExperience,
   SkillPackage,
@@ -87,6 +89,21 @@ export const packageSchema = z
     source: z.string().max(1024).optional()
   })
   .strict()
+/** 单条经验依据的长度上限，与 addExperience 保持一致。 */
+const EVIDENCE_LIMIT = 8192
+/** 跨技能/跨设备复制经验的条目；folderId 已映射为接收端本地项目 ID。 */
+export const experienceItemsSchema = z
+  .array(
+    z
+      .object({
+        content: z.string().trim().min(1).max(65536),
+        evidence: z.string().trim().min(1).max(EVIDENCE_LIMIT),
+        folderId: z.string().uuid().nullable()
+      })
+      .strict()
+  )
+  .min(1)
+  .max(100)
 export class SkillError extends Error {
   constructor(
     readonly status: number,
@@ -532,6 +549,76 @@ export class Skills {
         .run(id, revision).changes
     )
       throw new SkillError(409, '经验已更新，请重新读取后再删除')
+  }
+  /**
+   * 把选中的经验整理成可写入任意设备的复制条目。
+   * - 项目级经验必须在 folderMap 中给出目标项目，绝不静默降级为技能级；
+   * - evidence 末尾追加来源行，总长超过上限时截断原 evidence，来源行始终保留；
+   * - 本方法只读，不写库，远程复制时由接收端在自己的事务里写入。
+   */
+  prepareExperienceCopy(
+    input: { ids: unknown; folderMap: unknown },
+    sourceDevice: string
+  ): ExperienceCopyItem[] {
+    const ids = z.array(z.string().uuid()).min(1).max(100).parse(input.ids)
+    const folderMap = z.record(z.string().uuid(), z.string().uuid()).parse(input.folderMap ?? {})
+    if (new Set(ids).size !== ids.length) throw new SkillError(400, '经验 ID 不可重复')
+    const names = new Map<string, string>()
+    return this.experiences(ids).map((item) => {
+      let folderId: string | null = null
+      if (item.folderId) {
+        folderId = folderMap[item.folderId] ?? null
+        if (!folderId) throw new SkillError(400, '项目级经验需要选择目标项目')
+      }
+      if (!names.has(item.skillId)) names.set(item.skillId, this.row(item.skillId).name)
+      const line = `（复制自 ${sourceDevice}/${names.get(item.skillId)} 经验 ${item.id}）`
+      // 预留换行与省略号；来源行本身远小于上限（设备名≤100、技能名≤63）。
+      const room = EVIDENCE_LIMIT - line.length - 2
+      const original =
+        item.evidence.length > room ? `${item.evidence.slice(0, room)}…` : item.evidence
+      return { content: item.content, evidence: `${original}\n${line}`, folderId }
+    })
+  }
+  /**
+   * 在一个事务中把复制条目写入目标技能，返回新增与跳过条数。
+   * 目标作用域（skillId + folderId）下已存在完全相同 content 的经验视为重复并跳过，
+   * 因此重复点击复制是幂等的；任一 folder 不存在时整批回滚、不写入。
+   */
+  importExperiences(skillId: string, input: unknown): ExperienceCopyResult {
+    const items = experienceItemsSchema.parse(input)
+    const target = this.row(skillId).id
+    const known = new Set(this.store.folders().map((folder) => folder.id))
+    // 先完整校验再写入，配合事务保证整批“要么全写、要么不写”。
+    for (const item of items)
+      if (item.folderId && !known.has(item.folderId)) throw new SkillError(404, '项目不存在')
+    const exists = this.store.db.prepare(
+      'SELECT 1 FROM skill_experiences WHERE skillId=? AND folderId IS ? AND content=? LIMIT 1'
+    )
+    const insert = this.store.db.prepare('INSERT INTO skill_experiences VALUES(?,?,?,?,?,1,?,?)')
+    return this.store.db.transaction(() => {
+      let added = 0
+      let skipped = 0
+      const at = Date.now()
+      for (const item of items) {
+        // 同批内重复的条目也会因前一条刚写入而被跳过。
+        if (exists.get(target, item.folderId, item.content)) {
+          skipped++
+          continue
+        }
+        insert.run(randomUUID(), target, item.folderId, item.content, item.evidence, at, at)
+        added++
+      }
+      return { added, skipped }
+    })()
+  }
+  /** 本机到本机复制：读取源经验、按映射整理后写入目标技能。 */
+  copyExperiences(
+    input: { ids: unknown; targetSkillId: unknown; folderMap: unknown },
+    sourceDevice = '本机'
+  ): ExperienceCopyResult {
+    const targetSkillId = z.string().min(1).parse(input.targetSkillId)
+    const items = this.prepareExperienceCopy(input, sourceDevice)
+    return this.importExperiences(targetSkillId, items)
   }
   private definitions(id: string): SkillVariable[] {
     return (

@@ -864,3 +864,109 @@ it('已安装旧版管理技能的宿主升级时补装 ebisu-chat', () => {
       readFileSync(path.join(home, adapters[host].skillRoot, 'ebisu-chat', 'SKILL.md'), 'utf8')
     ).toContain('.ebisu/tools/chat')
 })
+it('经验复制到本机其他技能：技能级与项目级映射、重复跳过、来源行与长度上限、错误整批不写', () => {
+  const source = create()
+  const base = pkg()
+  const target = skills.create(
+    {
+      ...base,
+      name: 'target-skill',
+      files: {
+        ...base.files,
+        'SKILL.md': {
+          content: base.files['SKILL.md'].content.replace(
+            'name: sample-skill',
+            'name: target-skill'
+          )
+        }
+      }
+    },
+    'target'
+  )
+  const general = skills.addExperience({
+    skillId: source.id,
+    content: '通用经验',
+    evidence: '验证 A'
+  })
+  const scoped = skills.addExperience({
+    skillId: source.id,
+    folderId: first.id,
+    content: '项目经验',
+    evidence: '验证 B'
+  })
+  const long = skills.addExperience({
+    skillId: source.id,
+    content: '长依据经验',
+    evidence: 'x'.repeat(8192)
+  })
+  // 项目级经验缺少目标项目时拒绝，绝不降级为技能级。
+  expect(() =>
+    skills.copyExperiences({ ids: [scoped.id], targetSkillId: target.id, folderMap: {} })
+  ).toThrow('目标项目')
+  const result = skills.copyExperiences(
+    {
+      ids: [general.id, scoped.id, long.id],
+      targetSkillId: target.id,
+      folderMap: { [first.id]: second.id }
+    },
+    '电脑 A'
+  )
+  expect(result).toEqual({ added: 3, skipped: 0 })
+  const copied = skills.detail(target.id).experiences
+  expect(copied).toHaveLength(3)
+  const byContent = Object.fromEntries(copied.map((item) => [item.content, item]))
+  expect(byContent['通用经验']).toMatchObject({ folderId: null, revision: 1 })
+  expect(byContent['通用经验'].id).not.toBe(general.id)
+  expect(byContent['通用经验'].evidence).toBe(
+    `验证 A\n（复制自 电脑 A/sample-skill 经验 ${general.id}）`
+  )
+  expect(byContent['项目经验'].folderId).toBe(second.id)
+  const longEvidence = byContent['长依据经验'].evidence
+  expect(longEvidence).toHaveLength(8192)
+  expect(longEvidence.endsWith(`经验 ${long.id}）`)).toBe(true)
+  expect(longEvidence).toContain('…\n（复制自')
+  // 源经验保持不变。
+  expect(
+    skills
+      .detail(source.id)
+      .experiences.map((item) => item.evidence)
+      .sort()
+  ).toEqual(['x'.repeat(8192), '验证 A', '验证 B'])
+  // 再次复制同一批幂等：全部跳过。
+  expect(
+    skills.copyExperiences({
+      ids: [general.id, scoped.id, long.id],
+      targetSkillId: target.id,
+      folderMap: { [first.id]: second.id }
+    })
+  ).toEqual({ added: 0, skipped: 3 })
+  // 同内容但不同作用域不算重复：映射到原项目会新增。
+  expect(
+    skills.copyExperiences({
+      ids: [scoped.id],
+      targetSkillId: target.id,
+      folderMap: { [first.id]: first.id }
+    })
+  ).toEqual({ added: 1, skipped: 0 })
+  expect(() =>
+    skills.copyExperiences({
+      ids: [general.id],
+      targetSkillId: '00000000-0000-4000-8000-000000000000',
+      folderMap: {}
+    })
+  ).toThrow('技能不存在')
+  const before = skills.detail(target.id).experiences.length
+  // 一批中任一目标项目不存在时整批不写入。
+  expect(() =>
+    skills.importExperiences(target.id, [
+      { content: '新经验', evidence: '依据', folderId: null },
+      { content: '新项目经验', evidence: '依据', folderId: '00000000-0000-4000-8000-000000000000' }
+    ])
+  ).toThrow('项目不存在')
+  expect(skills.detail(target.id).experiences).toHaveLength(before)
+  expect(() =>
+    skills.importExperiences(target.id, [
+      { content: '超长', evidence: 'x'.repeat(8193), folderId: null }
+    ])
+  ).toThrow()
+})

@@ -27,6 +27,7 @@ import { TaskTitles } from './task-titles'
 import { DshSessionFacts, resumedAfterExit } from './dsh-session-facts'
 import { Skills, SkillError, targetSchema } from './skills'
 import { Lan } from './lan'
+import type { ExperienceCopyRequest } from '../shared/skills'
 import {
   terminalIconId,
   terminalIds,
@@ -369,6 +370,12 @@ function installIpc(): void {
       z.number().int().positive().parse(revision)
     )
     changed()
+  })
+  // 参数由 lan.copyExperiences 严格校验；本机目标直接写库，远程目标经 mTLS 写入对端。
+  handle('copy-experiences', async (request: unknown) => {
+    const result = await lan.copyExperiences(request as ExperienceCopyRequest)
+    changed()
+    return result
   })
   handle('skill-variables', (id: unknown, folderId: unknown) =>
     skills.variables(z.string().parse(id), z.string().uuid().nullable().parse(folderId))

@@ -77,3 +77,23 @@ export interface SkillRuntime {
   directory: string
   scripts: string[]
 }
+/** 复制到目标设备的一条经验；folderId 为接收端本地项目 ID，null 表示技能级。 */
+export interface ExperienceCopyItem {
+  content: string
+  evidence: string
+  folderId: string | null
+}
+export interface ExperienceCopyResult {
+  added: number
+  skipped: number
+}
+/**
+ * 把经验复制到另一个技能。targetDeviceId 为 null 或本机设备 ID 时写入本机，
+ * 否则经局域网写入已配对设备；folderMap 把源项目 ID 映射到目标设备上的项目 ID。
+ */
+export interface ExperienceCopyRequest {
+  ids: string[]
+  targetDeviceId: string | null
+  targetSkillId: string
+  folderMap: Record<string, string>
+}
