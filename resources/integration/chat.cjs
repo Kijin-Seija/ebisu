@@ -7,6 +7,7 @@
 const fs = require('node:fs')
 const http = require('node:http')
 const os = require('node:os')
+const path = require('node:path')
 
 const PROTOCOL = `Ebisu chat protocol v1
 Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；失败时 ok:false 且退出码非零)
@@ -15,19 +16,24 @@ Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；�
   devices                                  本机与已配对设备
   channels                                 频道摘要
   create  --channel <id> [--title t] [--devices a,b]      创建/合并频道（设备可写名称）
-  send    --channel <id> --to <member> [--type task] (--body t | --body-file <file|->)
+  send    --channel <id> --to <member> [--type task] (--body t | --body-file <file|->) [--image <png|jpg|gif|webp>]...
                                            发起一条定向消息（派单、审核意见等）
   inbox   [--stale-minutes 240]            待本参与者处理的消息：发给我、我尚未回复、且没有未过期的认领
   claim   --channel <id> --id <messageId> [--session <sessionId>]
                                            认领一条消息并绑定处理会话；返回 won=false 表示已被本参与者的其他会话抢先认领
-  progress --channel <id> --id <messageId> (--body t | --body-file -)   处理中进展，同时刷新认领
-  reply   --channel <id> --id <messageId> [--type result] (--body t | --body-file -)
+  progress --channel <id> --id <messageId> (--body t | --body-file -) [--image <file>]...
+                                           处理中进展，同时刷新认领
+  reply   --channel <id> --id <messageId> [--type result] (--body t | --body-file -) [--image <file>]...
                                            回复原发送者并标记该消息已处理
   done    --channel <id> --id <messageId> [--body t]                   不回复对方，仅标记已处理
   history --channel <id> [--limit 200]     频道历史
   binding --channel <id>                   本参与者在该频道最近绑定的会话
   delete  --channel <id>                   删除频道及全部消息；本机与其他持有副本的设备都会删除
 认领、进展和完成标记都通过 replyTo 指向原消息；inbox 只依据对话内容计算，可在任意会话重复调用。
+图片：--image 可重复，每条消息最多 4 张，仅 PNG/JPEG/GIF/WebP（按文件内容识别），单张不超过 4 MiB；
+  只有图片时正文可省略。history / inbox 中的消息带 attachments[]：{hash,name,mime,size,path}，
+  path 为本机图片绝对路径，可直接读取查看；对端图片尚未同步完成时 path 为 null 且 pending:true，稍后重试。
+  图片随频道一起删除（delete、对端删除、8 小时闲置清理），需要长期保留的图片请另行保存。
 频道对话全部完成后（主控确认结果、无待处理消息）应执行 delete 删除该频道；删除后可用同名 create 重新创建。
 每台设备每 8 小时自动删除最近 8 小时内没有新消息的频道，长期任务请定期 progress 保持活跃。
 `
@@ -42,7 +48,10 @@ function args(argv) {
       continue
     }
     const [key, inline] = argv[i].slice(2).split('=', 2)
-    result[key] = inline ?? (argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true)
+    const value = inline ?? (argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true)
+    // --image 可重复出现，收集为数组；其余参数后出现的覆盖先出现的。
+    if (key === 'image') (result.image ??= []).push(value)
+    else result[key] = value
   }
   return result
 }
@@ -64,6 +73,56 @@ function body(options, required = true) {
   if (required && !text.trim()) fail('missing --body or --body-file')
   return text
 }
+/** 与服务端一致的限制；服务端仍会按文件内容再次校验。 */
+const MAX_IMAGES = 4
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024
+/** 按文件头魔数识别图片类型，不信任扩展名。 */
+function imageMime(data) {
+  if (
+    data.length >= 8 &&
+    data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  )
+    return 'image/png'
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)
+    return 'image/jpeg'
+  const head = data.subarray(0, 6).toString('latin1')
+  if (head === 'GIF87a' || head === 'GIF89a') return 'image/gif'
+  if (
+    data.length >= 12 &&
+    data.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    data.subarray(8, 12).toString('latin1') === 'WEBP'
+  )
+    return 'image/webp'
+  return null
+}
+/** 读取 --image 指定的本地图片并逐张上传到频道，返回消息可引用的附件列表。 */
+async function images(options, runtime, channel) {
+  const files = options.image ?? []
+  if (files.some((file) => typeof file !== 'string' || !file)) fail('missing --image path')
+  if (files.length > MAX_IMAGES) fail(`too many images (max ${MAX_IMAGES})`)
+  const attachments = []
+  for (const file of files) {
+    const data = fs.readFileSync(file)
+    if (data.length > MAX_IMAGE_BYTES) fail(`image too large (max 4 MiB): ${file}`)
+    const mime = imageMime(data)
+    if (!mime) fail(`unsupported image (png/jpeg/gif/webp only): ${file}`)
+    const { file: uploaded } = await api(runtime, 'POST', '/v1/chat/files', {
+      channel,
+      name: path.basename(file),
+      mime,
+      data: data.toString('base64')
+    })
+    attachments.push({ hash: uploaded.hash })
+  }
+  return attachments
+}
+/** 带图片的消息正文可省略，此时用占位文本满足非空正文要求。 */
+function bodyWith(options, attachments) {
+  const text = body(options, !attachments.length)
+  return text.trim() ? text : '[图片]'
+}
+const withAttachments = (attachments) => (attachments.length ? { attachments } : {})
+
 /**
  * 参与者名称默认取 Ebisu 设备名（配对时双方看到的稳定名称），而不是 os.hostname()：
  * macOS 的 hostname 会随网络变化（如 xxx-45），身份漂移会导致收不到发给自己的消息。
@@ -206,15 +265,20 @@ async function main() {
         members: [me]
       })
       break
-    case 'send':
+    case 'send': {
+      const channel = need(options, 'channel')
+      const to = need(options, 'to')
+      const attachments = await images(options, runtime, channel)
       result = await post(runtime, {
-        channel: need(options, 'channel'),
+        channel,
         from: me,
-        to: need(options, 'to'),
+        to,
         type: typeof options.type === 'string' ? options.type : 'task',
-        body: body(options)
+        body: bodyWith(options, attachments),
+        ...withAttachments(attachments)
       })
       break
+    }
     case 'inbox': {
       const staleMs = Number(options['stale-minutes'] ?? 240) * 60000
       const now = Date.now()
@@ -235,6 +299,7 @@ async function main() {
             from: message.from,
             type: message.type,
             body: message.body,
+            ...(message.attachments ? { attachments: message.attachments } : {}),
             createdAt: message.createdAt,
             binding
           }
@@ -262,21 +327,28 @@ async function main() {
       result = { ok: true, won, claim: state.claim, handled: state.handled }
       break
     }
-    case 'progress':
+    case 'progress': {
+      const channel = need(options, 'channel')
+      const id = need(options, 'id')
+      const attachments = await images(options, runtime, channel)
       result = await post(runtime, {
-        channel: need(options, 'channel'),
+        channel,
         from: me,
         type: 'progress',
-        replyTo: need(options, 'id'),
-        body: body(options)
+        replyTo: id,
+        body: bodyWith(options, attachments),
+        ...withAttachments(attachments)
       })
       break
+    }
     case 'reply':
     case 'done': {
       const channel = need(options, 'channel')
       const id = need(options, 'id')
       const original = (await history(runtime, channel)).find((m) => m.id === id)
       if (!original) fail('message not found')
+      // done 只是完成标记，不携带图片。
+      const attachments = command === 'reply' ? await images(options, runtime, channel) : []
       result = await post(runtime, {
         channel,
         from: me,
@@ -288,7 +360,9 @@ async function main() {
               : 'result'
             : 'done',
         replyTo: id,
-        body: command === 'reply' ? body(options) : body(options, false) || '已处理'
+        body:
+          command === 'reply' ? bodyWith(options, attachments) : body(options, false) || '已处理',
+        ...withAttachments(attachments)
       })
       break
     }

@@ -35,6 +35,26 @@ export interface ChatMessage {
   createdAt: number
   /** 本机收到时间。 */
   receivedAt: number
+  /** 图片附件；没有附件时省略。 */
+  attachments?: ChatAttachment[]
+}
+/** 对话图片附件允许的类型；按文件头魔数识别，不信任扩展名。 */
+export const chatImageMimes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
+export type ChatImageMime = (typeof chatImageMimes)[number]
+/**
+ * 消息中的图片附件：按 sha256 内容寻址，随频道删除。
+ * path/pending 只在本机输出时计算，不参与跨设备复制。
+ */
+export interface ChatAttachment {
+  /** 文件内容的 sha256（小写十六进制）。 */
+  hash: string
+  name: string
+  mime: ChatImageMime
+  size: number
+  /** 本机文件绝对路径；尚未从对端下载完成时为 null。 */
+  path: string | null
+  /** true 表示本机仍在等待从对端同步该图片。 */
+  pending?: boolean
 }
 /** 频道删除标记：跨设备复制，阻止旧副本让已删除频道复活；创建时间晚于删除时间的频道视为重建。 */
 export interface ChatTombstone {
@@ -48,6 +68,8 @@ export interface ChatTombstone {
 export interface ChatChannelSummary extends ChatChannel {
   count: number
   last: ChatMessage | null
+  /** 本机尚未下载完成的图片数量；下载完成后界面据此刷新。 */
+  pendingFiles: number
 }
 export interface ChatDevice {
   id: string

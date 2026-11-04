@@ -105,7 +105,13 @@ async function loadChat() {
 }
 // 频道摘要随快照刷新；最后一条消息变化时重新拉取完整历史。
 watch(
-  () => [selected.value?.id, selectedChat.value?.count, selectedChat.value?.last?.id],
+  () => [
+    selected.value?.id,
+    selectedChat.value?.count,
+    selectedChat.value?.last?.id,
+    // 图片下载完成后 pendingFiles 减少，重新拉取以更新附件路径。
+    selectedChat.value?.pendingFiles
+  ],
   () => void loadChat()
 )
 function open(kind: 'chat' | 'command', id: string) {
@@ -128,7 +134,13 @@ const conversation = computed(() => {
       side: item.from === participants[0] ? 'right' : 'left',
       type: item.type,
       time: item.createdAt,
-      body: item.body
+      body: item.body,
+      images: item.attachments?.map((file) => ({
+        key: file.hash,
+        name: file.name,
+        src: file.path ? `ebisu-asset://chat-image/${file.hash}` : null,
+        pending: !file.path
+      }))
     }))
     return {
       title: chat.title,

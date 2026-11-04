@@ -1,17 +1,42 @@
 import { z } from 'zod'
+import { createHash, randomUUID } from 'node:crypto'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
+import path from 'node:path'
 import type { Store } from './database'
 import type { DeviceIdentity } from '../shared/lan'
-import type {
-  ChatChannel,
-  ChatChannelSummary,
-  ChatDevice,
-  ChatMessage,
-  ChatTombstone
+import {
+  chatImageMimes,
+  type ChatAttachment,
+  type ChatChannel,
+  type ChatChannelSummary,
+  type ChatDevice,
+  type ChatImageMime,
+  type ChatMessage,
+  type ChatTombstone
 } from '../shared/chat'
 import { SkillError } from './skills'
 
 /** 单条消息正文上限；大文件应通过 git 或附件链接传递。 */
 export const MAX_CHAT_BODY = 32 * 1024
+/** 单张图片附件上限。 */
+export const MAX_CHAT_IMAGE_BYTES = 4 * 1024 * 1024
+/** 单条消息最多携带的图片数量。 */
+export const MAX_CHAT_ATTACHMENTS = 4
+/** 图片按 mime 决定的文件扩展名；带扩展名便于 agent 工具按图片读取。 */
+const IMAGE_EXTENSIONS: Record<ChatImageMime, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp'
+}
 /** 单次同步响应的消息条数上限，超过时返回 more=true 由调用方继续拉取。 */
 const SYNC_BATCH = 200
 /** 长轮询上限，需小于各终端单条命令的超时时间。 */
@@ -38,6 +63,38 @@ const bodySchema = z
   .string()
   .min(1)
   .refine((value) => Buffer.byteLength(value) <= MAX_CHAT_BODY, '消息正文超过 32 KiB')
+export const chatHashSchema = z.string().regex(/^[a-f0-9]{64}$/, '图片哈希无效')
+/** 附件文件名只用于展示：去掉路径分隔符与控制字符，不参与本机存储路径。 */
+const fileNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  // eslint-disable-next-line no-control-regex
+  .transform((value) => value.replace(/[\\\/\u0000-\u001f\u007f]/g, '_'))
+const mimeSchema = z.enum(chatImageMimes)
+/** 线上传输的附件元数据；文件内容由接收方按哈希另行拉取。 */
+const wireAttachment = z
+  .object({
+    hash: chatHashSchema,
+    name: fileNameSchema,
+    mime: mimeSchema,
+    size: z.number().int().positive().max(MAX_CHAT_IMAGE_BYTES)
+  })
+  .strip()
+type WireAttachment = z.infer<typeof wireAttachment>
+/** 本机上传图片：data 为 base64；mime 可省略，始终以文件头魔数识别结果为准。 */
+export const uploadSchema = z
+  .object({
+    channel: channelIdSchema,
+    name: fileNameSchema,
+    mime: mimeSchema.optional(),
+    data: z
+      .string()
+      .min(1)
+      .max(Math.ceil(MAX_CHAT_IMAGE_BYTES / 3) * 4 + 8)
+  })
+  .strict()
 
 export const createChannelSchema = z
   .object({
@@ -55,7 +112,12 @@ export const postSchema = z
     type: typeSchema.optional(),
     body: bodySchema,
     replyTo: z.string().max(200).nullable().optional(),
-    clientId: z.string().min(1).max(200).nullable().optional()
+    clientId: z.string().min(1).max(200).nullable().optional(),
+    /** 只能引用已通过 uploadFile 上传到该频道的图片；其余字段以上传记录为准。 */
+    attachments: z
+      .array(z.object({ hash: chatHashSchema }).strip())
+      .max(MAX_CHAT_ATTACHMENTS)
+      .optional()
   })
   .strict()
 /** 线上传输的频道定义；接收方按并集合并，不信任对端的本机字段。 */
@@ -81,7 +143,9 @@ const wireMessage = z
     body: bodySchema,
     replyTo: z.string().max(200).nullable(),
     clientId: z.string().max(200).nullable(),
-    createdAt: z.number().int().nonnegative()
+    createdAt: z.number().int().nonnegative(),
+    /** 可选字段：旧版本对端 strip 后丢弃，不影响消息本身的复制。 */
+    attachments: z.array(wireAttachment).max(MAX_CHAT_ATTACHMENTS).optional()
   })
   .strip()
 /** 线上传输的频道删除标记；devices 为删除时持有副本的设备，用于限定传播范围。 */
@@ -141,6 +205,23 @@ interface MessageRow {
   clientId: string | null
   createdAt: number
   receivedAt: number
+  /** 附件元数据 JSON；无附件时为 NULL。 */
+  attachments: string | null
+}
+interface FileRow {
+  channel: string
+  hash: string
+  name: string
+  mime: ChatImageMime
+  size: number
+}
+/** 本机缺失、需要从频道内其他设备拉取的图片。 */
+export interface MissingChatFile {
+  channel: string
+  hash: string
+  size: number
+  /** 频道持有副本的设备，按来源设备优先排列。 */
+  devices: string[]
 }
 /** 设备目录由 LAN 层提供；未开启局域网时只有本机。 */
 export interface ChatDirectory {
@@ -158,6 +239,8 @@ interface Options {
   cleanupIntervalMs?: number
   cleanupDelayMs?: number
   tombstoneTtlMs?: number
+  /** 图片附件目录；默认与数据库同目录下的 chat-files。 */
+  filesDirectory?: string
 }
 export interface WaitInput {
   member: string
@@ -190,6 +273,10 @@ export class Chat {
     delay?: ReturnType<typeof setTimeout>
     interval?: ReturnType<typeof setInterval>
   } = {}
+  /** 图片按 sha256 内容寻址存放的目录，同一图片在多个频道间共享一份文件。 */
+  readonly filesDirectory: string
+  /** purge 释放引用的图片；事务结束后再检查引用并删除文件，避免回滚后文件已丢失。 */
+  private released = new Set<string>()
 
   constructor(
     private readonly store: Store,
@@ -236,7 +323,25 @@ export class Chat {
         id TEXT PRIMARY KEY, deletedAt INTEGER NOT NULL, deletedBy TEXT NOT NULL,
         devices TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS chat_files (
+        channel TEXT NOT NULL, hash TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL,
+        size INTEGER NOT NULL, PRIMARY KEY (channel, hash)
+      );
+      CREATE INDEX IF NOT EXISTS chat_files_hash ON chat_files(hash);
     `)
+    // 旧版本数据库原地追加附件列；INSERT 使用显式列名，不受物理列顺序影响。
+    const columns = store.db.prepare('PRAGMA table_info(chat_messages)').all() as {
+      name: string
+    }[]
+    if (!columns.some((column) => column.name === 'attachments'))
+      store.db.exec('ALTER TABLE chat_messages ADD COLUMN attachments TEXT')
+    this.filesDirectory =
+      options.filesDirectory ?? path.join(path.dirname(store.db.name), 'chat-files')
+    try {
+      this.sweepFiles()
+    } catch (error) {
+      console.warn('对话图片孤儿文件清理失败:', String(error))
+    }
   }
 
   /** LAN 层初始化后注入设备目录与推送通道。 */
@@ -264,13 +369,17 @@ export class Chat {
       'SELECT COUNT(*) AS count, MAX(seq) AS last FROM chat_messages WHERE channel=?'
     )
     const bySeq = this.store.db.prepare('SELECT * FROM chat_messages WHERE seq=?')
+    const files = this.store.db.prepare('SELECT hash, mime FROM chat_files WHERE channel=?')
     return rows.map((row) => {
       const stats = count.get(row.id) as { count: number; last: number | null }
       const last = stats.last ? (bySeq.get(stats.last) as MessageRow) : undefined
       return {
         ...channelFromRow(row),
         count: stats.count,
-        last: last ? messageFromRow(last) : null
+        last: last ? this.messageOf(last) : null,
+        pendingFiles: (files.all(row.id) as Pick<FileRow, 'hash' | 'mime'>[]).filter(
+          (file) => !existsSync(this.filePath(file.hash, file.mime))
+        ).length
       }
     })
   }
@@ -310,7 +419,7 @@ export class Chat {
    */
   deleteChannel(id: string): ChatTombstone {
     channelIdSchema.parse(id)
-    const tombstone = this.store.db.transaction(() => {
+    const transaction = this.store.db.transaction(() => {
       const channel = this.channel(id)
       if (!channel) throw new SkillError(404, '频道不存在')
       const latest = (
@@ -330,7 +439,13 @@ export class Chat {
       this.saveTombstone(value)
       this.purge(id)
       return value
-    })()
+    })
+    let tombstone: ChatTombstone
+    try {
+      tombstone = transaction()
+    } finally {
+      this.releaseFiles()
+    }
     this.notify()
     this.pushTombstone(tombstone)
     return tombstone
@@ -413,7 +528,7 @@ export class Chat {
         const existing = this.store.db
           .prepare('SELECT * FROM chat_messages WHERE channel=? AND origin=? AND clientId=?')
           .get(data.channel, origin, data.clientId) as MessageRow | undefined
-        if (existing) return { message: messageFromRow(existing), created: false }
+        if (existing) return { message: this.messageOf(existing), created: false }
       }
       const next =
         (
@@ -422,6 +537,7 @@ export class Chat {
             .get(data.channel, origin) as { max: number | null }
         ).max ?? 0
       const now = Math.max(this.now(), tombstone ? tombstone.deletedAt + 1 : 0)
+      const attachments = this.resolveAttachments(data.channel, data.attachments ?? [])
       const row = this.insert({
         channel: data.channel,
         origin,
@@ -432,7 +548,8 @@ export class Chat {
         body: data.body,
         replyTo: data.replyTo ?? null,
         clientId: data.clientId ?? null,
-        createdAt: now
+        createdAt: now,
+        ...(attachments.length ? { attachments } : {})
       })!
       this.addMembers(channel, [data.from, ...(data.to ? [data.to] : [])])
       return { message: row, created: true }
@@ -452,7 +569,7 @@ export class Chat {
          ORDER BY seq`
       )
       .all(channel, since, Math.min(Math.max(limit, 1), 2000)) as MessageRow[]
-    return rows.map(messageFromRow)
+    return rows.map((row) => this.messageOf(row))
   }
 
   /** 读取参与者尚未处理的消息；不包括自己发出的消息。 */
@@ -469,7 +586,7 @@ export class Chat {
          ORDER BY m.seq LIMIT ${SYNC_BATCH}`
       )
       .all(...ids, member, member, all ? 1 : 0, member) as MessageRow[]
-    return rows.map(messageFromRow)
+    return rows.map((row) => this.messageOf(row))
   }
 
   /**
@@ -578,7 +695,7 @@ export class Chat {
     const self = this.localDevice().id
     let inserted = 0
     let channelsChanged = false
-    this.store.db.transaction(() => {
+    const transaction = this.store.db.transaction(() => {
       // 先处理删除标记：同一批中重建的频道定义与新消息排在其后，不会被误删。
       for (const tombstone of payload.deleted ?? []) {
         if (!tombstone.devices.includes(self) || !tombstone.devices.includes(deviceId)) continue
@@ -606,7 +723,13 @@ export class Chat {
           this.addMembers(channel, [message.from, ...(message.to ? [message.to] : [])])
         }
       }
-    })()
+    })
+    try {
+      transaction()
+    } finally {
+      // 删除标记可能清除了频道，事务提交（或回滚）后再按引用删除图片文件。
+      this.releaseFiles()
+    }
     if (inserted || channelsChanged) this.notify()
     return inserted
   }
@@ -653,8 +776,16 @@ export class Chat {
       )
   }
 
-  /** 删除本机频道副本：频道定义、全部消息与各参与者游标。 */
+  /**
+   * 删除本机频道副本：频道定义、全部消息、各参与者游标与图片引用。
+   * 本地删除、对端删除标记与闲置清理都经过这里；图片文件在事务结束后由 releaseFiles 按引用删除。
+   */
   private purge(id: string): void {
+    for (const { hash } of this.store.db
+      .prepare('SELECT hash FROM chat_files WHERE channel=?')
+      .all(id) as { hash: string }[])
+      this.released.add(hash)
+    this.store.db.prepare('DELETE FROM chat_files WHERE channel=?').run(id)
     this.store.db.prepare('DELETE FROM chat_messages WHERE channel=?').run(id)
     this.store.db.prepare('DELETE FROM chat_cursors WHERE channel=?').run(id)
     this.store.db.prepare('DELETE FROM chat_channels WHERE id=?').run(id)
@@ -750,13 +881,17 @@ export class Chat {
       .run(JSON.stringify(next), this.now(), channel.id)
   }
 
-  /** 写入一条消息；已存在（同一来源计数）时返回 null。 */
+  /**
+   * 写入一条消息；已存在（同一来源计数）时返回 null。
+   * 带附件时同时登记频道图片引用：本机缺失的文件由 LAN 层按 missingFiles 异步拉取。
+   */
   private insert(message: ChatPush['messages'][number]): ChatMessage | null {
+    const attachments = message.attachments ?? []
     const result = this.store.db
       .prepare(
         `INSERT OR IGNORE INTO chat_messages
-         (channel, origin, counter, sender, recipient, type, body, replyTo, clientId, createdAt, receivedAt)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+         (channel, origin, counter, sender, recipient, type, body, replyTo, clientId, createdAt, receivedAt, attachments)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
       )
       .run(
         message.channel,
@@ -769,14 +904,209 @@ export class Chat {
         message.replyTo,
         message.clientId,
         message.createdAt,
-        this.now()
+        this.now(),
+        attachments.length ? JSON.stringify(attachments) : null
       )
     if (!result.changes) return null
-    return messageFromRow(
+    const link = this.store.db.prepare('INSERT OR IGNORE INTO chat_files VALUES(?,?,?,?,?)')
+    for (const file of attachments)
+      link.run(message.channel, file.hash, file.name, file.mime, file.size)
+    return this.messageOf(
       this.store.db
         .prepare('SELECT * FROM chat_messages WHERE seq=?')
         .get(result.lastInsertRowid) as MessageRow
     )
+  }
+
+  /** 行转消息：附件补充本机文件路径；文件尚未下载时 path 为 null 并标记 pending。 */
+  private messageOf(row: MessageRow): ChatMessage {
+    const attachments = parseAttachments(row.attachments)
+    return {
+      ...messageFromRow(row),
+      ...(attachments.length
+        ? { attachments: attachments.map((file) => this.localAttachment(file)) }
+        : {})
+    }
+  }
+
+  private localAttachment(file: WireAttachment): ChatAttachment {
+    const target = this.filePath(file.hash, file.mime)
+    return existsSync(target) ? { ...file, path: target } : { ...file, path: null, pending: true }
+  }
+
+  /** 图片在本机的存储路径；文件名由哈希与 mime 决定，不使用调用方提供的文件名。 */
+  filePath(hash: string, mime: ChatImageMime): string {
+    return path.join(this.filesDirectory, `${chatHashSchema.parse(hash)}.${IMAGE_EXTENSIONS[mime]}`)
+  }
+
+  /**
+   * 校验 post 引用的附件：必须已上传到同一频道（chat_files 有记录）且本机文件存在。
+   * 重复的哈希只保留一次；元数据以上传记录为准。
+   */
+  private resolveAttachments(channel: string, input: { hash: string }[]): WireAttachment[] {
+    const select = this.store.db.prepare('SELECT * FROM chat_files WHERE channel=? AND hash=?')
+    const result: WireAttachment[] = []
+    for (const hash of new Set(input.map((item) => item.hash))) {
+      const row = select.get(channel, hash) as FileRow | undefined
+      if (!row || !existsSync(this.filePath(row.hash, row.mime)))
+        throw new SkillError(400, `图片未上传到该频道：${hash}`)
+      result.push({ hash: row.hash, name: row.name, mime: row.mime, size: row.size })
+    }
+    return result
+  }
+
+  /**
+   * 本机上传图片：校验 base64、大小与文件头魔数，按 sha256 写入内容寻址目录并登记频道引用。
+   * 声明的 mime 与实际内容不一致时拒绝；重复上传同一内容幂等。
+   */
+  uploadFile(input: z.input<typeof uploadSchema>): ChatAttachment {
+    const data = uploadSchema.parse(input)
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data.data))
+      throw new SkillError(400, '图片数据不是有效的 base64')
+    const buffer = Buffer.from(data.data, 'base64')
+    if (!buffer.length) throw new SkillError(400, '图片内容为空')
+    if (buffer.length > MAX_CHAT_IMAGE_BYTES) throw new SkillError(413, '图片超过 4 MiB')
+    const mime = detectImageMime(buffer)
+    if (!mime) throw new SkillError(415, '仅支持 PNG、JPEG、GIF、WebP 图片')
+    if (data.mime && data.mime !== mime)
+      throw new SkillError(400, `图片内容（${mime}）与声明的类型（${data.mime}）不一致`)
+    if (!this.channel(data.channel)) throw new SkillError(404, '频道不存在，请先创建')
+    const hash = sha256(buffer)
+    this.writeFile(hash, mime, buffer)
+    this.store.db
+      .prepare('INSERT OR IGNORE INTO chat_files VALUES(?,?,?,?,?)')
+      .run(data.channel, hash, data.name, mime, buffer.length)
+    const row = this.store.db
+      .prepare('SELECT * FROM chat_files WHERE channel=? AND hash=?')
+      .get(data.channel, hash) as FileRow
+    // 只返回附件元数据，不把内部的 channel 列带给调用方
+    return this.localAttachment({ hash: row.hash, name: row.name, mime: row.mime, size: row.size })
+  }
+
+  /**
+   * 保存从对端拉取的图片：只接受本机频道已登记的哈希，并校验大小、sha256 与魔数。
+   * 频道在下载期间被删除时丢弃数据并返回 false。
+   */
+  storeFile(channel: string, hash: string, data: Buffer): boolean {
+    const row = this.store.db
+      .prepare('SELECT * FROM chat_files WHERE channel=? AND hash=?')
+      .get(channel, hash) as FileRow | undefined
+    if (!row) return false
+    if (data.length !== row.size || sha256(data) !== hash || detectImageMime(data) !== row.mime)
+      throw new SkillError(400, '图片校验失败')
+    if (existsSync(this.filePath(hash, row.mime))) return true
+    this.writeFile(hash, row.mime, data)
+    this.notify()
+    return true
+  }
+
+  /**
+   * 回答对端的图片拉取：请求设备必须持有该频道副本，且该频道引用了此哈希、本机文件存在。
+   */
+  readFileFor(
+    deviceId: string,
+    channel: string,
+    hash: string
+  ): { data: string; mime: ChatImageMime; size: number } {
+    channelIdSchema.parse(channel)
+    chatHashSchema.parse(hash)
+    const definition = this.channel(channel)
+    if (!definition || !definition.devices.includes(deviceId))
+      throw new SkillError(403, '无权访问该频道图片')
+    const row = this.store.db
+      .prepare('SELECT * FROM chat_files WHERE channel=? AND hash=?')
+      .get(channel, hash) as FileRow | undefined
+    const target = row && this.filePath(row.hash, row.mime)
+    if (!row || !target || !existsSync(target)) throw new SkillError(404, '图片不存在')
+    return { data: readFileSync(target).toString('base64'), mime: row.mime, size: row.size }
+  }
+
+  /** 界面显示用：任一频道引用了该哈希且本机文件存在时返回路径与类型。 */
+  imageFile(hash: string): { path: string; mime: ChatImageMime } | null {
+    if (!chatHashSchema.safeParse(hash).success) return null
+    const row = this.store.db
+      .prepare('SELECT mime FROM chat_files WHERE hash=? LIMIT 1')
+      .get(hash) as Pick<FileRow, 'mime'> | undefined
+    if (!row) return null
+    const target = this.filePath(hash, row.mime)
+    return existsSync(target) ? { path: target, mime: row.mime } : null
+  }
+
+  /** 本机已登记但文件缺失的图片，供 LAN 层从频道内其他设备拉取；同一哈希只返回一次。 */
+  missingFiles(limit = 64): MissingChatFile[] {
+    const rows = this.store.db.prepare('SELECT * FROM chat_files ORDER BY rowid').all() as FileRow[]
+    const seen = new Set<string>()
+    const result: MissingChatFile[] = []
+    const origins = this.store.db.prepare(
+      `SELECT DISTINCT origin FROM chat_messages WHERE channel=? AND attachments LIKE ?`
+    )
+    for (const row of rows) {
+      if (result.length >= limit) break
+      if (seen.has(row.hash) || existsSync(this.filePath(row.hash, row.mime))) continue
+      const channel = this.channel(row.channel)
+      if (!channel) continue
+      seen.add(row.hash)
+      // 优先向引用该图片的消息来源设备拉取，其次是频道内其他设备。
+      const preferred = (origins.all(row.channel, `%${row.hash}%`) as { origin: string }[]).map(
+        (item) => item.origin
+      )
+      const self = this.localDevice().id
+      result.push({
+        channel: row.channel,
+        hash: row.hash,
+        size: row.size,
+        devices: union(preferred, channel.devices).filter((id) => id !== self)
+      })
+    }
+    return result
+  }
+
+  /**
+   * 清理孤儿文件：目录中没有任何频道引用的图片与写入中断留下的临时文件。
+   * 启动时执行一次；正常删除路径由 releaseFiles 即时处理。
+   */
+  sweepFiles(): number {
+    if (!existsSync(this.filesDirectory)) return 0
+    const referenced = this.store.db.prepare('SELECT 1 FROM chat_files WHERE hash=? LIMIT 1')
+    let removed = 0
+    for (const name of readdirSync(this.filesDirectory)) {
+      const match = /^([a-f0-9]{64})\.(png|jpg|gif|webp)$/.exec(name)
+      if (match && referenced.get(match[1])) continue
+      rmSync(path.join(this.filesDirectory, name), { force: true, recursive: true })
+      removed++
+    }
+    return removed
+  }
+
+  /** 删除 purge 释放、且已不被任何频道引用的图片文件；共享同一图片的其他频道保留文件。 */
+  private releaseFiles(): void {
+    if (!this.released.size) return
+    const hashes = [...this.released]
+    this.released.clear()
+    const referenced = this.store.db.prepare('SELECT 1 FROM chat_files WHERE hash=? LIMIT 1')
+    for (const hash of hashes) {
+      if (referenced.get(hash)) continue
+      for (const extension of Object.values(IMAGE_EXTENSIONS))
+        try {
+          rmSync(path.join(this.filesDirectory, `${hash}.${extension}`), { force: true })
+        } catch (error) {
+          console.warn('删除对话图片失败:', String(error))
+        }
+    }
+  }
+
+  /** 原子写入图片文件：先写临时文件再重命名，已存在时跳过。 */
+  private writeFile(hash: string, mime: ChatImageMime, data: Buffer): void {
+    const target = this.filePath(hash, mime)
+    if (existsSync(target)) return
+    mkdirSync(this.filesDirectory, { recursive: true, mode: 0o700 })
+    const temporary = `${target}.${randomUUID()}.tmp`
+    try {
+      writeFileSync(temporary, data, { mode: 0o600 })
+      renameSync(temporary, target)
+    } finally {
+      rmSync(temporary, { force: true })
+    }
   }
 
   private notify(): void {
@@ -835,7 +1165,7 @@ function tombstoneFromRow(row: TombstoneRow): ChatTombstone {
 function wireChannelOf(channel: ChatChannel): ChatPush['channels'][number] {
   return { ...channel }
 }
-function messageFromRow(row: MessageRow): ChatMessage {
+function messageFromRow(row: MessageRow): Omit<ChatMessage, 'attachments'> {
   return {
     seq: row.seq,
     id: `${row.origin}:${row.counter}`,
@@ -853,6 +1183,13 @@ function messageFromRow(row: MessageRow): ChatMessage {
   }
 }
 function wireOf(message: ChatMessage): ChatPush['messages'][number] {
+  // 附件只传元数据（去掉本机 path/pending）；无附件时不带该字段，保持旧格式。
+  const attachments = (message.attachments ?? []).map(({ hash, name, mime, size }) => ({
+    hash,
+    name,
+    mime,
+    size
+  }))
   return {
     channel: message.channel,
     origin: message.origin,
@@ -863,9 +1200,48 @@ function wireOf(message: ChatMessage): ChatPush['messages'][number] {
     body: message.body,
     replyTo: message.replyTo,
     clientId: message.clientId,
-    createdAt: message.createdAt
+    createdAt: message.createdAt,
+    ...(attachments.length ? { attachments } : {})
   }
 }
 function wireFromRow(row: MessageRow): ChatPush['messages'][number] {
-  return wireOf(messageFromRow(row))
+  const attachments = parseAttachments(row.attachments)
+  return wireOf({ ...messageFromRow(row), attachments: attachments.map(withoutPath) })
+}
+function withoutPath(file: WireAttachment): ChatAttachment {
+  return { ...file, path: null }
+}
+/** 解析库内附件 JSON；损坏或不合法时视为无附件，不影响消息读取。 */
+function parseAttachments(value: string | null): WireAttachment[] {
+  if (!value) return []
+  try {
+    const parsed = z.array(wireAttachment).max(MAX_CHAT_ATTACHMENTS).safeParse(JSON.parse(value))
+    return parsed.success ? parsed.data : []
+  } catch {
+    return []
+  }
+}
+/** 按文件头魔数识别图片类型；不是支持的图片格式时返回 null。 */
+export function detectImageMime(data: Buffer): ChatImageMime | null {
+  if (
+    data.length >= 8 &&
+    data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  )
+    return 'image/png'
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)
+    return 'image/jpeg'
+  if (data.length >= 6) {
+    const head = data.subarray(0, 6).toString('latin1')
+    if (head === 'GIF87a' || head === 'GIF89a') return 'image/gif'
+  }
+  if (
+    data.length >= 12 &&
+    data.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    data.subarray(8, 12).toString('latin1') === 'WEBP'
+  )
+    return 'image/webp'
+  return null
+}
+export function sha256(data: Buffer): string {
+  return createHash('sha256').update(data).digest('hex')
 }

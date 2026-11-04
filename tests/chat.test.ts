@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { Store } from '../src/main/database'
-import { Chat, CHAT_IDLE_MS, CHAT_TOMBSTONE_TTL_MS, type ChatPush } from '../src/main/chat'
+import {
+  Chat,
+  CHAT_IDLE_MS,
+  CHAT_TOMBSTONE_TTL_MS,
+  MAX_CHAT_IMAGE_BYTES,
+  type ChatPush
+} from '../src/main/chat'
 import { startServer } from '../src/main/server'
 
 let root: string
@@ -393,8 +399,9 @@ function pair() {
   const state = { clock: 1_000_000, offline: false }
   const now = () => state.clock
   const storeB = new Store(path.join(root, 'b.sqlite'))
-  const chatA = new Chat(store, () => a, { now })
-  const chatB = new Chat(storeB, () => b, { now })
+  // 两台设备的数据库在同一临时目录，图片目录必须分开，模拟各自独立的本机存储。
+  const chatA = new Chat(store, () => a, { now, filesDirectory: path.join(root, 'files-a') })
+  const chatB = new Chat(storeB, () => b, { now, filesDirectory: path.join(root, 'files-b') })
   const directory = {
     list: () => [],
     resolve: (value: string) => [a.id, b.id].find((id) => id === value) ?? null
@@ -556,3 +563,295 @@ it('自动清理定时器：启动后延迟执行一次，之后按周期执行�
     vi.useRealTimers()
   }
 })
+
+/** 最小的“图片”：只需文件头魔数正确，服务端不解码像素。 */
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const png = (seed: string) => Buffer.concat([PNG_SIGNATURE, Buffer.from(seed)])
+const jpeg = (seed: string) =>
+  Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from(seed)])
+const sha = (data: Buffer) => createHash('sha256').update(data).digest('hex')
+const upload = (target: Chat, channel: string, data: Buffer, name = 'shot.png') =>
+  target.uploadFile({ channel, name, data: data.toString('base64') })
+
+it('图片上传：魔数识别类型、大小与数量上限、只能引用本频道已上传的图片', () => {
+  chat.createChannel({ id: 'img' })
+  chat.createChannel({ id: 'other' })
+  // 内容不是支持的图片格式（扩展名不可信）
+  expect(() => upload(chat, 'img', Buffer.from('not an image'), 'fake.png')).toThrow('仅支持')
+  // 声明类型与内容不一致
+  expect(() =>
+    chat.uploadFile({
+      channel: 'img',
+      name: 'a.jpg',
+      mime: 'image/jpeg',
+      data: png('x').toString('base64')
+    })
+  ).toThrow('不一致')
+  // 超过 4 MiB
+  const huge = Buffer.concat([PNG_SIGNATURE, Buffer.alloc(MAX_CHAT_IMAGE_BYTES)])
+  expect(() => upload(chat, 'img', huge)).toThrow()
+  expect(() => upload(chat, 'missing', png('x'))).toThrow('频道不存在')
+  expect(() => chat.uploadFile({ channel: 'img', name: 'x.png', data: '!!!' })).toThrow('base64')
+
+  const first = upload(chat, 'img', png('one'), '../../etc/one.png')
+  expect(first).toMatchObject({ hash: sha(png('one')), mime: 'image/png', size: png('one').length })
+  // 文件名只用于展示，路径分隔符被替换；存储路径由哈希决定
+  expect(first.name).not.toContain('/')
+  expect(first.path).toBe(path.join(root, 'chat-files', `${first.hash}.png`))
+  expect(readFileSync(first.path!)).toEqual(png('one'))
+  const photo = upload(chat, 'img', jpeg('two'), 'photo.jpg')
+  expect(photo.path!.endsWith('.jpg')).toBe(true)
+  // 重复上传幂等
+  expect(upload(chat, 'img', png('one')).hash).toBe(first.hash)
+
+  // 未上传的哈希、其他频道上传的图片都不能引用
+  expect(() =>
+    chat.post({ channel: 'img', from: 'a', body: 'x', attachments: [{ hash: 'f'.repeat(64) }] })
+  ).toThrow('图片未上传')
+  const foreign = upload(chat, 'other', png('foreign'))
+  expect(() =>
+    chat.post({ channel: 'img', from: 'a', body: 'x', attachments: [{ hash: foreign.hash }] })
+  ).toThrow('图片未上传')
+  // 最多 4 张
+  const five = ['1', '2', '3', '4', '5'].map((seed) => ({
+    hash: upload(chat, 'img', png(seed)).hash
+  }))
+  expect(() => chat.post({ channel: 'img', from: 'a', body: 'x', attachments: five })).toThrow()
+
+  const message = chat.post({
+    channel: 'img',
+    from: 'a',
+    body: '截图',
+    attachments: [{ hash: first.hash }, { hash: photo.hash }, { hash: first.hash }]
+  })
+  // 重复引用同一图片只保留一次，元数据以上传记录为准
+  expect(message.attachments).toEqual([first, photo])
+  expect(chat.history('img')[0].attachments!.map((file) => file.path)).toEqual([
+    first.path,
+    photo.path
+  ])
+  // 无附件的消息不带 attachments 字段
+  expect(chat.post({ channel: 'img', from: 'a', body: 'plain' })).not.toHaveProperty('attachments')
+  // 同步应答只带附件元数据，不泄露本机路径
+  const peer = randomUUID()
+  store.db
+    .prepare('UPDATE chat_channels SET devices=? WHERE id=?')
+    .run(JSON.stringify([device.id, peer]), 'img')
+  const wire = chat.answerSync(peer, { channels: {} }).messages
+  expect(wire[0].attachments).toEqual([
+    { hash: first.hash, name: first.name, mime: 'image/png', size: first.size },
+    { hash: photo.hash, name: 'photo.jpg', mime: 'image/jpeg', size: photo.size }
+  ])
+  expect(wire[1]).not.toHaveProperty('attachments')
+  expect(chat.summaries().find((c) => c.id === 'img')!.pendingFiles).toBe(0)
+})
+
+it('图片随频道删除：共享图片在仍被引用时保留，闲置清理同样删除，启动时清理孤儿文件', () => {
+  chat.createChannel({ id: 'a' })
+  chat.createChannel({ id: 'b' })
+  const shared = upload(chat, 'a', png('shared'))
+  upload(chat, 'b', png('shared'))
+  const only = upload(chat, 'a', png('only-a'))
+  chat.post({
+    channel: 'a',
+    from: 'x',
+    body: 'img',
+    attachments: [{ hash: shared.hash }, { hash: only.hash }]
+  })
+  chat.post({ channel: 'b', from: 'x', body: 'img', attachments: [{ hash: shared.hash }] })
+  const files = () =>
+    (
+      store.db.prepare('SELECT channel, hash FROM chat_files ORDER BY channel').all() as {
+        channel: string
+      }[]
+    ).map((row) => row.channel)
+  chat.deleteChannel('a')
+  expect(existsSync(only.path!)).toBe(false)
+  expect(existsSync(shared.path!)).toBe(true)
+  expect(chat.imageFile(only.hash)).toBeNull()
+  expect(chat.imageFile(shared.hash)).toEqual({ path: shared.path, mime: 'image/png' })
+  expect(files()).toEqual(['b'])
+  chat.deleteChannel('b')
+  expect(existsSync(shared.path!)).toBe(false)
+  expect(files()).toEqual([])
+
+  // 闲置清理走同一删除路径
+  let clock = 0
+  const local = new Chat(store, () => device, { now: () => clock })
+  try {
+    local.createChannel({ id: 'old' })
+    const stale = upload(local, 'old', png('stale'))
+    local.post({ channel: 'old', from: 'x', body: 'img', attachments: [{ hash: stale.hash }] })
+    clock = CHAT_IDLE_MS + 1
+    expect(local.cleanup()).toEqual(['old'])
+    expect(existsSync(stale.path!)).toBe(false)
+
+    // 孤儿文件（无引用的图片、写入中断的临时文件）在新实例启动时删除，被引用的保留
+    local.createChannel({ id: 'keep' })
+    const kept = upload(local, 'keep', png('kept'))
+    const directory = path.join(root, 'chat-files')
+    mkdirSync(directory, { recursive: true })
+    const orphan = path.join(directory, `${sha(png('orphan'))}.png`)
+    const temporary = path.join(directory, `${kept.hash}.png.123.tmp`)
+    writeFileSync(orphan, png('orphan'))
+    writeFileSync(temporary, 'partial')
+    const restarted = new Chat(store, () => device)
+    restarted.close()
+    expect(existsSync(orphan)).toBe(false)
+    expect(existsSync(temporary)).toBe(false)
+    expect(existsSync(kept.path!)).toBe(true)
+  } finally {
+    local.close()
+  }
+})
+
+it('跨设备图片：接收端登记缺失文件、按哈希校验后落盘，非成员不可读取，删除标记同步删除图片', () => {
+  const { a, b, chatA, chatB, close } = pair()
+  try {
+    chatA.createChannel({ id: 'bug/S-9', devices: [b.id] })
+    const image = upload(chatA, 'bug/S-9', png('remote'))
+    chatA.post({
+      channel: 'bug/S-9',
+      from: 'a/main',
+      body: '看图',
+      attachments: [{ hash: image.hash }]
+    })
+    // B 收到消息但图片尚未拉取：path 为 null 且 pending
+    const pending = chatB.history('bug/S-9')[0].attachments!
+    expect(pending).toEqual([
+      {
+        hash: image.hash,
+        name: 'shot.png',
+        mime: 'image/png',
+        size: image.size,
+        path: null,
+        pending: true
+      }
+    ])
+    expect(chatB.summaries()[0].pendingFiles).toBe(1)
+    expect(chatB.missingFiles()).toEqual([
+      { channel: 'bug/S-9', hash: image.hash, size: image.size, devices: [a.id] }
+    ])
+    // 非频道设备不能读取；频道成员可以
+    expect(() => chatA.readFileFor(randomUUID(), 'bug/S-9', image.hash)).toThrow('无权')
+    expect(() => chatA.readFileFor(b.id, 'bug/S-9', 'a'.repeat(64))).toThrow('图片不存在')
+    const served = chatA.readFileFor(b.id, 'bug/S-9', image.hash)
+    // 篡改的数据被拒绝，不落盘
+    expect(() => chatB.storeFile('bug/S-9', image.hash, png('tampered'))).toThrow('校验失败')
+    expect(chatB.storeFile('bug/S-9', image.hash, Buffer.from(served.data, 'base64'))).toBe(true)
+    const local = chatB.history('bug/S-9')[0].attachments![0]
+    expect(local.path).toBe(path.join(root, 'files-b', `${image.hash}.png`))
+    expect(sha(readFileSync(local.path!))).toBe(image.hash)
+    expect(chatB.missingFiles()).toEqual([])
+    // 未登记到频道的哈希不会被写入
+    expect(chatB.storeFile('bug/S-9', sha(png('x')), png('x'))).toBe(false)
+    // A 删除频道：删除标记传播到 B，B 的图片同步删除
+    chatA.deleteChannel('bug/S-9')
+    expect(chatB.channel('bug/S-9')).toBeNull()
+    expect(existsSync(local.path!)).toBe(false)
+    expect(existsSync(image.path!)).toBe(false)
+  } finally {
+    close()
+  }
+})
+
+it('chat 客户端 --image：上传后随消息发送，history/inbox 输出本机路径，非图片被拒绝', async () => {
+  const runtimeFile = path.join(root, 'runtime.json')
+  const server = await startServer(store, runtimeFile, () => {}, undefined, chat)
+  const cli = path.join(__dirname, '../resources/integration/chat.cjs')
+  const run = (args: string[], input?: string) =>
+    new Promise<{ code: number; out: Record<string, any> }>((resolve, reject) => {
+      const child = spawn(process.execPath, [cli, '--runtime', runtimeFile, ...args], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      })
+      let out = ''
+      child.stdout.on('data', (chunk) => (out += chunk))
+      child.once('error', reject)
+      child.once('close', (code) => resolve({ code: code ?? 0, out: JSON.parse(out) }))
+      child.stdin.end(input ?? '')
+    })
+  const as = (who: string) => ['--terminal', 'claude', '--member', who]
+  try {
+    await run(['create', ...as('main'), '--channel', 'bug/S-7'])
+    const first = path.join(root, 'first.png')
+    const second = path.join(root, 'second.jpeg')
+    writeFileSync(first, png('cli-1'))
+    writeFileSync(second, jpeg('cli-2'))
+    const sent = await run([
+      'send',
+      ...as('main'),
+      '--channel',
+      'bug/S-7',
+      '--to',
+      'w',
+      '--body',
+      '看这两张图',
+      '--image',
+      first,
+      '--image',
+      second
+    ])
+    expect(sent.code).toBe(0)
+    const attachments = sent.out.message.attachments as {
+      hash: string
+      path: string
+      name: string
+    }[]
+    expect(attachments.map((file) => [file.name, file.hash])).toEqual([
+      ['first.png', sha(png('cli-1'))],
+      ['second.jpeg', sha(jpeg('cli-2'))]
+    ])
+    expect(readFileSync(attachments[1].path)).toEqual(jpeg('cli-2'))
+    const history = (await run(['history', ...as('main'), '--channel', 'bug/S-7'])).out
+    expect(history.messages[0].attachments.map((file: { path: string }) => file.path)).toEqual(
+      attachments.map((file) => file.path)
+    )
+    const inbox = (await run(['inbox', ...as('w')])).out
+    expect(inbox.tasks[0].attachments[0]).toMatchObject({
+      hash: sha(png('cli-1')),
+      mime: 'image/png'
+    })
+    // 只有图片时正文可省略
+    const imageOnly = await run([
+      'progress',
+      ...as('w'),
+      '--channel',
+      'bug/S-7',
+      '--id',
+      sent.out.message.id,
+      '--image',
+      first
+    ])
+    expect(imageOnly.out.message).toMatchObject({ body: '[图片]', type: 'progress' })
+    // 扩展名伪装的文本文件、超过 4 张均被拒绝
+    const fake = path.join(root, 'fake.png')
+    writeFileSync(fake, 'plain text')
+    const rejected = await run([
+      'send',
+      ...as('main'),
+      '--channel',
+      'bug/S-7',
+      '--to',
+      'w',
+      '--image',
+      fake
+    ])
+    expect(rejected.code).toBe(1)
+    expect(rejected.out.reason).toContain('unsupported image')
+    const tooMany = await run([
+      'send',
+      ...as('main'),
+      '--channel',
+      'bug/S-7',
+      '--to',
+      'w',
+      ...Array.from({ length: 5 }, () => ['--image', first]).flat()
+    ])
+    expect(tooMany.out.reason).toContain('too many images')
+    // 删除频道后图片文件随之删除
+    await run(['delete', ...as('main'), '--channel', 'bug/S-7'])
+    for (const file of attachments) expect(existsSync(file.path)).toBe(false)
+  } finally {
+    await server.close()
+  }
+}, 30000)

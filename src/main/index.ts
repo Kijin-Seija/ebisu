@@ -37,7 +37,7 @@ import {
   type TerminalId
 } from '../shared/types'
 
-// 自定义 scheme 仅提供白名单头像，不把完整文件系统暴露给 renderer。
+// 自定义 scheme 仅提供白名单头像与对话图片，不把完整文件系统暴露给 renderer。
 protocol.registerSchemesAsPrivileged([
   { scheme: 'ebisu-asset', privileges: { standard: true, secure: true, supportFetchAPI: true } }
 ])
@@ -549,6 +549,14 @@ async function boot(): Promise<void> {
   protocol.handle('ebisu-asset', async (request) => {
     const url = new URL(request.url)
     const parts = url.pathname.split('/').filter(Boolean)
+    // 对话图片：ebisu-asset://chat-image/<sha256>，只服务仍被某个频道引用且本机已下载的文件。
+    if (url.hostname === 'chat-image') {
+      const image = parts.length === 1 ? lan.chat.imageFile(parts[0]) : null
+      if (!image) return new Response('Not found', { status: 404 })
+      return new Response(readFileSync(image.path), {
+        headers: { 'Content-Type': image.mime, 'Cache-Control': 'no-store' }
+      })
+    }
     if (
       url.hostname !== 'avatar' ||
       parts.length !== 2 ||

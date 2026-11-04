@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  statSync
+} from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { request } from 'node:https'
@@ -627,6 +636,57 @@ it('Agent 对话：推送失败时由轮询同步补齐，并经中间设备转�
   await b.lan.poll()
   await c.lan.poll()
   expect(c.lan.chat.history('control')).toHaveLength(3)
+})
+
+it('Agent 对话图片：对端同步后拉取文件且哈希一致，非频道设备被拒，删除频道后对端图片删除', async () => {
+  const a = await make()
+  const b = await make()
+  const c = await make()
+  await pair(a, b)
+  // c 与 a 配对但不在频道内
+  await start(c, 'Computer C')
+  announce(c, a)
+  const pending = c.lan.requestPair(a.lan.device().id)
+  await until(() => a.lan.view().requests.length > 0)
+  await a.lan.respondPair(a.lan.view().requests[0].id, true)
+  await c.lan.poll()
+  expect(await pending).toBe('paired')
+  await a.lan.poll()
+  a.lan.chat.createChannel({ id: 'bug/IMG-1', devices: [b.lan.device().id] })
+  await until(() => !!b.lan.chat.channel('bug/IMG-1'))
+  const image = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from('lan image payload')
+  ])
+  const hash = createHash('sha256').update(image).digest('hex')
+  const uploaded = a.lan.chat.uploadFile({
+    channel: 'bug/IMG-1',
+    name: 'screen.png',
+    data: image.toString('base64')
+  })
+  expect(uploaded.path).toBe(path.join(a.directory, 'chat-files', `${hash}.png`))
+  a.lan.chat.post({
+    channel: 'bug/IMG-1',
+    from: 'a/claude',
+    body: '看截图',
+    attachments: [{ hash }]
+  })
+  // 推送到达后 B 后台拉取图片；轮询同样会补拉
+  await until(() => !!b.lan.chat.history('bug/IMG-1')[0]?.attachments?.[0]?.path)
+  const local = b.lan.chat.history('bug/IMG-1')[0].attachments![0]
+  expect(local).toMatchObject({ hash, name: 'screen.png', mime: 'image/png', size: image.length })
+  expect(local.path).toBe(path.join(b.directory, 'chat-files', `${hash}.png`))
+  expect(createHash('sha256').update(readFileSync(local.path!)).digest('hex')).toBe(hash)
+  expect(b.lan.chat.summaries()[0].pendingFiles).toBe(0)
+  // 频道 ID 含 /，路径中需编码；成员可读取，非成员与未配对设备被拒
+  const route = `/lan/v1/chat/files/${encodeURIComponent('bug/IMG-1')}/${hash}`
+  expect((await raw(b, a.lan.view().port!, route)).status).toBe(200)
+  expect((await raw(c, a.lan.view().port!, route)).status).toBe(403)
+  // A 删除频道：删除标记推送到 B，B 的图片随频道删除
+  a.lan.chat.deleteChannel('bug/IMG-1')
+  expect(existsSync(uploaded.path!)).toBe(false)
+  await until(() => !b.lan.chat.channel('bug/IMG-1'))
+  expect(existsSync(local.path!)).toBe(false)
 })
 
 it('Agent 对话：未配对证书无法访问对话接口', async () => {

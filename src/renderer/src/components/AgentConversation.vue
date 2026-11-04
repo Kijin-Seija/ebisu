@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
-import { NButton, NTag } from 'naive-ui'
+import { NButton, NImage, NImageGroup, NTag } from 'naive-ui'
 import { ArrowLeft, MessagesSquare } from 'lucide-vue-next'
 
 /** 对话流中的一条气泡；right 表示本机一侧发出的内容。 */
@@ -16,6 +16,15 @@ export interface ConversationItem {
   body: string
   /** 可折叠的补充内容，例如远程任务的原始输出。 */
   detail?: string
+  pending?: boolean
+  /** 图片附件；pending 表示本机仍在从对端同步该图片。 */
+  images?: ConversationImage[]
+}
+export interface ConversationImage {
+  key: string
+  name: string
+  /** ebisu-asset://chat-image/<hash>；同步中时为空。 */
+  src: string | null
   pending?: boolean
 }
 
@@ -99,6 +108,23 @@ watch(
         </div>
         <div class="bubble">
           <p>{{ item.body }}</p>
+          <n-image-group v-if="item.images?.length">
+            <div class="bubble-images">
+              <template v-for="image in item.images" :key="image.key">
+                <n-image
+                  v-if="image.src"
+                  class="bubble-image"
+                  :src="image.src"
+                  :alt="image.name"
+                  :title="image.name"
+                  width="120"
+                  height="120"
+                  object-fit="cover"
+                />
+                <div v-else class="bubble-image placeholder" :title="image.name">图片同步中…</div>
+              </template>
+            </div>
+          </n-image-group>
           <details v-if="item.detail">
             <summary>查看原始输出</summary>
             <pre>{{ item.detail }}</pre>

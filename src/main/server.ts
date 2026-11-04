@@ -227,6 +227,13 @@ async function chatRoute(
       send(response, 200, { ok: true, deleted: chat.deleteChannel(body.id) })
       return
     }
+    case 'POST /v1/chat/files':
+      // 图片先上传再由消息引用；base64 后约 5.4 MiB，单独放宽请求体上限。
+      send(response, 200, {
+        ok: true,
+        file: chat.uploadFile((await readBody(request, 6 * 1024 * 1024)) as never)
+      })
+      return
     case 'POST /v1/chat/messages':
       send(response, 200, {
         ok: true,

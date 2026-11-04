@@ -195,6 +195,11 @@ export class Lan {
   private publication?: Service
   private timer?: ReturnType<typeof setInterval>
   private polling?: Promise<void>
+  /** 正在进行的对话图片拉取；同一时间只运行一轮，期间的新触发在本轮结束后再跑一轮。 */
+  private fileSync?: Promise<void>
+  private fileSyncAgain = false
+  /** 拉取失败的图片哈希 -> 下次允许重试的时间（真实时钟），避免对端长期缺失时每 2 秒反复请求。 */
+  private fileRetryAt = new Map<string, number>()
   private pendingRequests = new Set<ReturnType<typeof request>>()
   /** 等待本机用户确认的请求；只在内存中保存，关闭共享或重启后失效。 */
   private pairRequests = new Map<string, PairRequest>()
@@ -215,7 +220,11 @@ export class Lan {
       now: this.now,
       changed: options.changed
     })
-    this.chat = new Chat(store, () => this.device(), { now: this.now, changed: options.changed })
+    this.chat = new Chat(store, () => this.device(), {
+      now: this.now,
+      changed: options.changed,
+      filesDirectory: path.join(options.directory, 'chat-files')
+    })
     store.db.exec(`CREATE TABLE IF NOT EXISTS lan_state(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS lan_peers(id TEXT PRIMARY KEY,value TEXT NOT NULL);`)
     for (const row of store.db.prepare('SELECT id,value FROM lan_peers').all() as {
@@ -513,6 +522,21 @@ export class Lan {
               send(200, {
                 accepted: this.chat.ingest(peer.device.id, await readJson(8 * 1024 * 1024))
               })
+              // 新消息可能带有本机缺失的图片，后台拉取，不阻塞推送应答。
+              void this.syncChatFiles()
+              return
+            }
+            // 图片拉取：只有持有该频道副本的设备可以读取该频道引用的图片；频道 ID 含 / 时需编码。
+            const chatFileMatch = /^\/lan\/v1\/chat\/files\/([^/]+)\/([a-f0-9]{64})$/.exec(url)
+            if (req.method === 'GET' && chatFileMatch) {
+              send(
+                200,
+                this.chat.readFileFor(
+                  peer.device.id,
+                  decodeURIComponent(chatFileMatch[1]),
+                  chatFileMatch[2]
+                )
+              )
               return
             }
             if (req.method === 'POST' && url === '/lan/v1/chat/sync') {
@@ -575,6 +599,21 @@ export class Lan {
                 : error instanceof z.ZodError || error instanceof SyntaxError
                   ? 400
                   : 500,
+            // 已配对设备写入经验：整批校验并在接收端事务中写入，日志与错误中不回显经验全文。
+            const experienceMatch = /^\/lan\/v1\/skills\/([a-f0-9-]{36})\/experiences$/.exec(url)
+            if (experienceMatch && req.method === 'POST') {
+              const data = z
+                .object({ experiences: experienceItemsSchema })
+                .strict()
+                .parse(await readJson(MAX_BODY))
+              const result = this.skills.importExperiences(
+                z.string().uuid().parse(experienceMatch[1]),
+                data.experiences
+              )
+              send(200, result)
+              if (result.added) this.options.changed()
+              return
+            }
               { error: error instanceof SkillError ? error.message : '局域网请求失败' }
             )
           }
@@ -1039,6 +1078,8 @@ export class Lan {
             if (this.online(peer)) await this.syncChat(peer)
           })
         )
+      // 同步后补拉缺失的对话图片；失败的下载在下一轮轮询重试。
+      void this.syncChatFiles()
       // 已发起的配对请求由主进程统一轮询，界面关闭后也能完成配对。
       await Promise.all([...this.outgoingPairs.values()].map((entry) => this.checkOutgoing(entry)))
     })().finally(() => {
@@ -1070,6 +1111,57 @@ export class Lan {
     } catch {
       /* 旧版本对端不支持对话或网络瞬断；下一轮轮询重试。 */
     }
+  }
+  /**
+   * 拉取本机缺失的对话图片：依次向引用该图片的来源设备及频道内其他在线设备请求，
+   * 校验 sha256、大小与类型后落盘。全部失败时保留缺失状态，由下一轮轮询或推送重试。
+   */
+  private syncChatFiles(): Promise<void> {
+    if (this.fileSync) {
+      this.fileSyncAgain = true
+      return this.fileSync
+    }
+    this.fileSync = (async () => {
+      do {
+        this.fileSyncAgain = false
+        for (const item of this.chat.missingFiles()) {
+          if ((this.fileRetryAt.get(item.hash) ?? 0) > Date.now()) continue
+          let stored = false
+          for (const id of item.devices) {
+            if (!this.enabled || !this.server) return
+            const peer = this.peers.get(id)
+            if (!peer || !this.online(peer)) continue
+            try {
+              const response = await this.fetch(
+                peer.address,
+                peer.fingerprint,
+                `/lan/v1/chat/files/${encodeURIComponent(item.channel)}/${item.hash}`
+              )
+              if (!this.enabled || this.peers.get(id) !== peer) return
+              const body = z
+                .object({ data: z.string().max(MAX_BODY) })
+                .passthrough()
+                .parse(response.body)
+              stored = this.chat.storeFile(
+                item.channel,
+                item.hash,
+                Buffer.from(body.data, 'base64')
+              )
+              if (stored) break
+            } catch {
+              /* 对端没有该文件、旧版本或网络瞬断：尝试下一台设备。 */
+            }
+          }
+          if (stored) this.fileRetryAt.delete(item.hash)
+          else this.fileRetryAt.set(item.hash, Date.now() + 10_000)
+        }
+      } while (this.fileSyncAgain && this.enabled)
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        this.fileSync = undefined
+      })
+    return this.fileSync
   }
   /** 本机写入后立即推送；离线或失败的设备由 syncChat 补齐。 */
   private pushChat(devices: string[], payload: ChatPush): void {
@@ -1212,6 +1304,7 @@ export class Lan {
     }
     await this.polling
     await Promise.all(this.refreshes.values())
+    await this.fileSync
   }
   async resume(): Promise<void> {
     if (this.enabled) await this.configure(true, this.identity.name, true)
@@ -1220,6 +1313,52 @@ export class Lan {
     await this.configuring.catch(() => undefined)
     this.enabled = false
     this.commands.close()
+  /**
+   * 复制经验到目标技能：目标是本机（null 或本机设备 ID）时直接写库，
+   * 否则整理条目后通过 mTLS 写入已配对且在线的设备。
+   */
+  async copyExperiences(input: ExperienceCopyRequest): Promise<ExperienceCopyResult> {
+    const request = z
+      .object({
+        ids: z.array(z.string().uuid()).min(1).max(100),
+        targetDeviceId: z.string().uuid().nullable(),
+        targetSkillId: z.string().uuid(),
+        folderMap: z.record(z.string().uuid(), z.string().uuid())
+      })
+      .strict()
+      .parse(input)
+    if (!request.targetDeviceId || request.targetDeviceId === this.identity.id)
+      return this.skills.copyExperiences(request, this.identity.name)
+    return this.copyExperiencesToPeer(request.targetDeviceId, request)
+  }
+  async copyExperiencesToPeer(
+    deviceId: string,
+    input: { ids: string[]; targetSkillId: string; folderMap: Record<string, string> }
+  ): Promise<ExperienceCopyResult> {
+    const peer = this.peers.get(z.string().uuid().parse(deviceId))
+    if (!this.enabled || !peer) throw new SkillError(401, '设备未连接')
+    if (!this.online(peer))
+      throw new SkillError(409, `目标设备 ${peer.device.name} 离线，无法复制经验`)
+    const skillId = z.string().uuid().parse(input.targetSkillId)
+    const experiences = this.skills.prepareExperienceCopy(input, this.identity.name)
+    let response: { body: unknown }
+    try {
+      response = await this.fetch(
+        peer.address,
+        peer.fingerprint,
+        `/lan/v1/skills/${skillId}/experiences`,
+        { experiences }
+      )
+    } catch (error) {
+      // 旧版本对端没有该路由，会在“非 GET 请求”分支返回 404 接口不存在。
+      if (error instanceof LanHttpError && error.status === 404 && error.message === '接口不存在')
+        throw new SkillError(426, '对方 Ebisu 版本过旧，请升级')
+      throw error
+    }
+    return z
+      .object({ added: z.number().int().min(0), skipped: z.number().int().min(0) })
+      .parse(response.body)
+  }
     this.chat.close()
     await this.stop()
   }

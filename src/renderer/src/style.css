@@ -1819,6 +1819,28 @@ button:focus-visible {
   line-height: 1.55;
   font-size: 13.5px;
 }
+.bubble-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.bubble-image {
+  width: 120px;
+  height: 120px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: zoom-in;
+}
+.bubble-image.placeholder {
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  color: var(--secondary);
+  font-size: 12px;
+  cursor: default;
+}
 .bubble details {
   margin-top: 8px;
   font-size: 12px;
