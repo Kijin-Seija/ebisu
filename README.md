@@ -45,7 +45,9 @@ pnpm dev
 pnpm package:mac
 ```
 
-本地构建不包含 Apple Developer ID 签名和公证。正式分发时需自行配置签名身份与公证凭据。
+本地构建使用 ad-hoc 签名（`mac.identity: '-'`）：签名自洽，但没有 Developer ID 和公证。首次打开时 Gatekeeper 会提示“无法验证开发者”，在“系统设置 → 隐私与安全性 → 仍要打开”放行一次即可；也可以执行 `xattr -dr com.apple.quarantine /Applications/Ebisu.app`。未签名或签名损坏的包会被报“已损坏”，那种状态没有“仍要打开”按钮。
+
+`scripts/after-pack.cjs` 在 codesign 之前修复 Electron framework 的符号链接结构：部分安装方式（例如 pnpm 把 Electron 的 framework 展开成实体文件）会让 codesign 报 `bundle format is ambiguous` 并拒绝签名，安装包随之变成“已损坏”。构建后可用 `codesign --verify --deep --strict dist/mac-arm64/Ebisu.app` 校验签名。正式分发给外部用户仍需配置 Developer ID 与公证凭据。
 
 ## 使用
 
