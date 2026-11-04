@@ -151,11 +151,11 @@ Authorization: Bearer <runtime.json 中的 token>
 ```sh
 pnpm typecheck
 pnpm build
-/Users/jiewan/.codex/bin/vitest-safe -- pnpm test
-/Users/jiewan/.codex/bin/vitest-safe -- pnpm test:smoke
+pnpm test
+pnpm test:smoke
 ```
 
-本项目按仓库要求，所有项目测试必须走 vitest-safe 队列。其他机器可将包装器路径换为其安装位置；测试脚本不内嵌本机绝对路径。
+测试直接运行即可，可在 `pnpm test` 后附测试文件只跑部分用例。
 
 better-sqlite3 按 Electron ABI 编译，`pnpm test` 使用 Electron 的 Node 模式运行 Vitest，不需要反复切换本机 Node ABI。更换 Electron 版本后执行 `pnpm rebuild`。
 
@@ -164,7 +164,7 @@ better-sqlite3 按 Electron ABI 编译，`pnpm test` 使用 Electron 的 Node �
 `pnpm test` 包含局域网配对确认、证书固定、请求过期与重放、离线缓存、设备隔离及技能导入校验；`pnpm test:smoke` 还会启动两个隔离的 Electron 实例，验收附近设备发现、配对确认弹窗、远端项目与会话、技能改名和预览编辑、导入、离线统计及解除配对。只需复测局域网界面时，可在构建后单独运行：
 
 ```sh
-/Users/jiewan/.codex/bin/vitest-safe -- node scripts/lan-smoke.cjs
+node scripts/lan-smoke.cjs
 ```
 
 ## 目录结构
