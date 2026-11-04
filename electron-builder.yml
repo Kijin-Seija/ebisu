@@ -1,6 +1,8 @@
 appId: local.ebisu.desktop
 productName: Ebisu
 electronDist: node_modules/electron/dist
+# 签名前修复 Electron framework 的符号链接结构，详见 scripts/after-pack.cjs。
+afterPack: scripts/after-pack.cjs
 directories:
   output: dist
 files:
@@ -27,6 +29,9 @@ mac:
     - target: zip
       arch: [arm64]
   category: public.app-category.developer-tools
-  identity: null
+  # 没有 Developer ID 时使用 ad-hoc 签名（"-"）。签名自洽后 Gatekeeper 的拦截形态是
+  # “无法验证开发者”，可以在 系统设置 → 隐私与安全性 → 仍要打开 放行；未签名则会被报“已损坏”。
+  # 拿到 Developer ID 后把这里换成证书名，并配置 notarize 即可。
+  identity: '-'
 dmg:
   title: Ebisu
