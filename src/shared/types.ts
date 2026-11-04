@@ -113,6 +113,8 @@ export interface EbisuApi extends DeviceApi {
   saveSkillFile(id: string, relative: string): Promise<string | null>
   installSkill(id: string, terminal: TerminalId): Promise<void>
   uninstallSkill(id: string, terminal: TerminalId): Promise<void>
+  /** 彻底删除技能及其经验、变量与终端入口；confirm 必须等于技能名。 */
+  deleteSkill(id: string, confirm: string): Promise<{ id: string; name: string }>
   deleteExperience(id: string, revision: number): Promise<void>
   /** 复制经验到本机或已配对设备上的技能；整批事务写入，重复内容跳过。 */
   copyExperiences(

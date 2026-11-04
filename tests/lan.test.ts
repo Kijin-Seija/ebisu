@@ -367,6 +367,41 @@ it('导出只有源文件和当前变量定义，不传播经验、配置和终�
   writeFileSync(path.join(a.skills.root, skill.id, 'SKILL.md'), 'modified')
   await expect(b.lan.remoteSkill(a.lan.device().id, skill.id)).rejects.toThrow('外部修改')
 })
+it('删除技能后清理局域网导入记录；对端导出与经验写入返回不存在，同名可重新导入', async () => {
+  const a = await make()
+  const b = await make()
+  const source = a.skills.create(pkg(), 'source')
+  await pair(a, b)
+  const draft = await b.lan.prepareImport(a.lan.device().id, source.id)
+  const imported = b.lan.transfer.confirm(draft.id, { name: source.name, texts: {} })
+  expect(b.store.db.prepare('SELECT COUNT(*) AS n FROM lan_imports').get()).toEqual({ n: 1 })
+  b.skills.delete(imported, source.name)
+  expect(b.store.db.prepare('SELECT COUNT(*) AS n FROM lan_imports').get()).toEqual({ n: 0 })
+  // 草稿已消费，重试确认不会返回指向已删除技能的旧 ID。
+  expect(() => b.lan.transfer.confirm(draft.id, { name: source.name, texts: {} })).toThrow('过期')
+  const again = await b.lan.prepareImport(a.lan.device().id, source.id)
+  expect(again).toMatchObject({ existingId: null, conflict: false })
+  const reimported = b.lan.transfer.confirm(again.id, { name: source.name, texts: {} })
+  expect(reimported).not.toBe(imported)
+  // 源端删除后：已缓存的技能 ID 导出与经验写入均为 404，不影响服务。
+  const experience = a.skills.addExperience({
+    skillId: source.id,
+    content: '源经验',
+    evidence: '验证'
+  })
+  const local = b.skills.addExperience({ skillId: reimported, content: '经验', evidence: '验证' })
+  a.skills.delete(source.id, source.name)
+  await expect(b.lan.remoteSkill(a.lan.device().id, source.id)).rejects.toThrow('技能不存在')
+  await expect(
+    b.lan.copyExperiences({
+      ids: [local.id],
+      targetDeviceId: a.lan.device().id,
+      targetSkillId: source.id,
+      folderMap: {}
+    })
+  ).rejects.toThrow('技能不存在')
+  expect(() => a.skills.experiences([experience.id])).toThrow('经验不存在')
+})
 it('同内容去重、异内容冲突；改名仅更新标准引用，草稿可编辑且确认重试幂等', async () => {
   const a = await make()
   const b = await make()

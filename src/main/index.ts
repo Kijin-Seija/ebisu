@@ -364,6 +364,11 @@ function installIpc(): void {
     skills.uninstall(z.string().parse(id), terminalSchema.parse(terminal))
     changed()
   })
+  handle('delete-skill', (id: unknown, confirm: unknown) => {
+    const result = skills.delete(z.string().parse(id), z.string().parse(confirm))
+    changed()
+    return result
+  })
   handle('delete-experience', (id: unknown, revision: unknown) => {
     skills.deleteExperience(
       z.string().uuid().parse(id),

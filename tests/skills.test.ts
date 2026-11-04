@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -1012,4 +1013,134 @@ it('内置 push-code：git push 被 pre-push 拦截时以非零退出码失败',
   expect(failed?.code).not.toBe(0)
   expect(failed?.code).toBeTruthy()
   expect(failed?.stderr).toContain('git push 失败')
+})
+
+it('删除技能：移除各终端入口，级联清空经验、变量各层与安装记录，删除中央目录且同名可重建', () => {
+  const result = create()
+  skills.addVariable(result.id, {
+    name: 'SECRET_TOKEN',
+    description: '凭据',
+    type: 'string',
+    sensitive: true,
+    scopes: ['skill', 'terminal', 'project']
+  })
+  skills.setVariable(result.id, 'SECRET_TOKEN', { scope: 'skill' }, 'secret-global')
+  skills.setVariable(result.id, 'SECRET_TOKEN', { scope: 'terminal', terminal: 'codex' }, 's2')
+  skills.setVariable(result.id, 'DEMO_VALUE', { scope: 'project', folderId: first.id }, 'p')
+  skills.addExperience({ skillId: result.id, content: '技能经验', evidence: '验证' })
+  skills.addExperience({
+    skillId: result.id,
+    folderId: first.id,
+    content: '项目经验',
+    evidence: '验证'
+  })
+  // 另一个技能的数据不受影响。
+  const other = skills.create(
+    {
+      ...pkg(),
+      name: 'other-skill',
+      files: {
+        ...pkg().files,
+        'SKILL.md': { content: '---\nname: other-skill\ndescription: 其他\n---\n其他' }
+      }
+    },
+    'other'
+  )
+  skills.addExperience({ skillId: other.id, content: '其他经验', evidence: '验证' })
+  skills.install(other.id, 'codex')
+  for (const terminal of ['codex', 'claude'] as const) skills.install(result.id, terminal)
+  const entries = (['codex', 'claude'] as const).map((terminal) =>
+    path.join(home, adapters[terminal].skillRoot, result.name)
+  )
+  for (const entry of entries) expect(readdirSync(entry)).toContain('SKILL.md')
+
+  expect(() => skills.delete(result.id, 'wrong-name')).toThrow('确认名称不匹配')
+  expect(() => skills.delete('missing-skill', 'missing-skill')).toThrow('技能不存在')
+  expect(skills.list()).toHaveLength(2)
+
+  expect(skills.delete(result.name, result.name)).toEqual({ id: result.id, name: result.name })
+  for (const entry of entries) expect(existsSync(entry)).toBe(false)
+  expect(existsSync(path.join(skills.root, result.id))).toBe(false)
+  expect(readdirSync(path.join(root, '.ebisu', 'skills-trash'))).toEqual([])
+  for (const table of [
+    'skill_experiences',
+    'skill_variables',
+    'skill_values',
+    'skill_installations'
+  ])
+    expect(
+      store.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE skillId=?`).get(result.id)
+    ).toEqual({ n: 0 })
+  expect(skills.list().map((item) => item.name)).toEqual(['other-skill'])
+  expect(skills.detail(other.id).experiences).toHaveLength(1)
+  expect(existsSync(path.join(home, adapters.codex.skillRoot, 'other-skill', 'SKILL.md'))).toBe(
+    true
+  )
+  expect(() => skills.detail(result.id)).toThrow('技能不存在')
+
+  const recreated = skills.create(pkg(), 'request-recreated')
+  expect(recreated.id).not.toBe(result.id)
+  expect(recreated.experiences).toEqual([])
+  expect(skills.variables(recreated.id, first.id)[0]).toMatchObject({
+    global: { value: 'base' },
+    project: { hasValue: false }
+  })
+  skills.install(recreated.id, 'claude')
+  // 删除后原 requestId 可再用于新的创建。
+  skills.delete(recreated.id, recreated.name)
+  expect(skills.create(pkg(), 'request-one').id).not.toBe(result.id)
+})
+it('删除技能遇到被修改的终端入口时整体回滚：数据库、其他入口与中央目录全部保留', () => {
+  const result = create()
+  skills.addExperience({ skillId: result.id, content: '经验', evidence: '验证' })
+  skills.install(result.id, 'claude')
+  skills.install(result.id, 'codex')
+  const claudeEntry = path.join(home, adapters.claude.skillRoot, result.name, 'SKILL.md')
+  const original = readFileSync(claudeEntry, 'utf8')
+  const codexEntry = path.join(home, adapters.codex.skillRoot, result.name, 'SKILL.md')
+  const codexOriginal = readFileSync(codexEntry, 'utf8')
+  writeFileSync(codexEntry, '用户改动')
+  expect(() => skills.delete(result.id, result.name)).toThrow('已被修改')
+  expect(readFileSync(claudeEntry, 'utf8')).toBe(original)
+  expect(skills.detail(result.id).installations).toHaveLength(2)
+  expect(skills.detail(result.id).experiences).toHaveLength(1)
+  expect(skills.variables(result.id)[0].global.value).toBe('base')
+  expect(readFileSync(path.join(skills.root, result.id, 'SKILL.md'), 'utf8')).toContain('不可变')
+  expect(readdirSync(path.join(root, '.ebisu', 'skills-trash'))).toEqual([])
+  // 用户恢复入口后可重试成功。
+  writeFileSync(codexEntry, codexOriginal)
+  skills.delete(result.id, result.name)
+  expect(skills.list()).toEqual([])
+  expect(existsSync(codexEntry)).toBe(false)
+})
+it('删除提交后中央目录残留在暂存区时，下次启动自动清理', () => {
+  const trash = path.join(root, '.ebisu', 'skills-trash', 'leftover')
+  mkdirSync(path.join(trash, 'scripts'), { recursive: true })
+  writeFileSync(path.join(trash, 'scripts', 'x.sh'), 'x')
+  new Skills(store, { home, dataDirectory: root, resources, client: integrations.skillsClient })
+  expect(readdirSync(path.join(root, '.ebisu', 'skills-trash'))).toEqual([])
+})
+it('客户端 delete 需要显式确认名，HTTP 未知技能 404、确认不符 400', async () => {
+  integrations.prepareBridge()
+  const result = create()
+  skills.install(result.id, 'codex')
+  server = await startServer(store, path.join(root, 'runtime.json'), () => {}, skills)
+  const invoke = (...args: string[]) =>
+    execute(integrations.skillsClient, ['--terminal', 'codex', ...args], {
+      env: { ...process.env, HOME: home },
+      timeout: 20000
+    })
+  expect((await invoke('protocol')).stdout).toContain('delete --skill <id|name> --confirm')
+  await expect(invoke('delete', '--skill', result.id)).rejects.toThrow('--confirm')
+  await expect(invoke('delete', '--skill', result.id, '--confirm', 'other')).rejects.toThrow('400')
+  await expect(invoke('delete', '--skill', 'missing', '--confirm', 'missing')).rejects.toThrow(
+    '404'
+  )
+  expect(skills.list()).toHaveLength(1)
+  const deleted = JSON.parse(
+    (await invoke('delete', '--skill', result.name, '--confirm', result.name)).stdout
+  )
+  expect(deleted).toEqual({ ok: true, id: result.id, name: result.name })
+  expect(existsSync(path.join(home, adapters.codex.skillRoot, result.name))).toBe(false)
+  expect(skills.list()).toEqual([])
 })

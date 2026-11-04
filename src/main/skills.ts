@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync
 } from 'node:fs'
@@ -157,6 +158,7 @@ export class Skills {
     this.home = realpathSync(options.home)
     safeFile(options.dataDirectory, '.ebisu/skills')
     mkdirSync(this.root, { recursive: true, mode: 0o700 })
+    this.sweepTrash()
     store.db.exec(`
       CREATE TABLE IF NOT EXISTS skills(id TEXT PRIMARY KEY,name TEXT UNIQUE NOT NULL,description TEXT NOT NULL,createdAt INTEGER NOT NULL,package TEXT NOT NULL,requestId TEXT UNIQUE NOT NULL,packageHash TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS skill_experiences(id TEXT PRIMARY KEY,skillId TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,folderId TEXT REFERENCES folders(id) ON DELETE CASCADE,content TEXT NOT NULL,evidence TEXT NOT NULL,revision INTEGER NOT NULL,createdAt INTEGER NOT NULL,updatedAt INTEGER NOT NULL);
@@ -456,6 +458,85 @@ export class Skills {
     this.store.db
       .prepare('DELETE FROM skill_installations WHERE skillId=? AND terminal=?')
       .run(row.id, installation.terminal)
+  }
+  /** 删除事务提交前暂存中央目录的位置；与 skills 同父目录，保证 rename 原子。 */
+  private get trash(): string {
+    return path.join(this.options.dataDirectory, '.ebisu', 'skills-trash')
+  }
+  /** 启动时清理上次删除提交后未能移除的中央目录；失败只保留，下次启动再试。 */
+  private sweepTrash(): void {
+    if (!existsSync(this.trash)) return
+    for (const name of readdirSync(this.trash))
+      try {
+        rmSync(safeFile(this.trash, name), { recursive: true, force: true })
+      } catch {
+        // 占用或权限问题不影响启动，下次启动继续清理。
+      }
+  }
+  /**
+   * 彻底删除技能，confirm 必须与技能名完全一致，防止误删。
+   * 顺序与边界：
+   * 1. 先把中央目录 rename 到 skills-trash（同父目录、原子、可逆）；
+   * 2. 在一个 SQLite 事务里移除所有终端入口（FileChanges 记录原文）并级联删除
+   *    变量取值（含加密值）、变量定义、经验（含项目层）、安装记录、局域网导入记录与技能行；
+   * 3. 任何一步失败：回滚事务、恢复终端入口、把中央目录 rename 回原处，不留半删除状态；
+   * 4. 事务提交后再删除 trash 中的目录；此时失败只留下与数据库无关的垃圾目录，
+   *    下次启动由 sweepTrash 重试，因此数据库永远不会指向缺失目录或残留孤儿行。
+   * 终端入口被用户改写时与 uninstall 一致返回 409，整次删除不生效。
+   */
+  delete(id: string, confirm: string): { id: string; name: string } {
+    const row = this.row(id)
+    if (z.string().parse(confirm) !== row.name)
+      throw new SkillError(400, `确认名称不匹配，需传入技能名 ${row.name}`)
+    const directory = this.directory(row)
+    mkdirSync(this.trash, { recursive: true, mode: 0o700 })
+    const parked = safeFile(this.trash, `${row.id}-${randomUUID()}`)
+    const moved = existsSync(directory)
+    if (moved) renameSync(directory, parked)
+    const changes = new FileChanges()
+    const db = this.store.db
+    const installations = db
+      .prepare('SELECT * FROM skill_installations WHERE skillId=?')
+      .all(row.id) as InstallRow[]
+    const terminals = installations.map((item) => item.terminal)
+    try {
+      db.transaction(() => {
+        for (const installation of installations) this.removeInstallation(installation, changes)
+        db.prepare('DELETE FROM skill_values WHERE skillId=?').run(row.id)
+        db.prepare('DELETE FROM skill_variables WHERE skillId=?').run(row.id)
+        db.prepare('DELETE FROM skill_experiences WHERE skillId=?').run(row.id)
+        // lan_imports 由 SkillTransfer 创建，单独使用 Skills 时可能不存在。
+        if (
+          db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lan_imports'").get()
+        )
+          db.prepare('DELETE FROM lan_imports WHERE skillId=?').run(row.id)
+        db.prepare('DELETE FROM skills WHERE id=?').run(row.id)
+      })()
+    } catch (error) {
+      changes.rollback()
+      if (moved) renameSync(parked, directory)
+      throw error
+    }
+    // 入口目录在文件移除后若只剩空目录则一并清掉；含用户自有文件时保留。仅是整洁性处理。
+    for (const terminal of terminals)
+      try {
+        const root = safeFile(this.home, `${adapters[terminal].skillRoot}/${row.name}`)
+        const files = existsSync(root)
+          ? readdirSync(root, { recursive: true, withFileTypes: true }).filter(
+              (entry) => !entry.isDirectory()
+            )
+          : null
+        if (files && !files.length) rmSync(root, { recursive: true, force: true })
+      } catch {
+        // 清理失败不影响删除结果。
+      }
+    if (moved)
+      try {
+        rmSync(parked, { recursive: true, force: true })
+      } catch {
+        // 提交后目录已与数据库解耦，留给下次启动的 sweepTrash。
+      }
+    return { id: row.id, name: row.name }
   }
   uninstall(id: string, terminal: TerminalId): void {
     const installation = this.installation(this.row(id).id, terminal)

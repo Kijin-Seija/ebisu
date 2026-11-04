@@ -26,6 +26,7 @@ const api: EbisuApi = {
   saveSkillFile: (id, relative) => ipcRenderer.invoke('ebisu:save-skill-file', id, relative),
   installSkill: (id, terminal) => ipcRenderer.invoke('ebisu:install-skill', id, terminal),
   uninstallSkill: (id, terminal) => ipcRenderer.invoke('ebisu:uninstall-skill', id, terminal),
+  deleteSkill: (id, confirm) => ipcRenderer.invoke('ebisu:delete-skill', id, confirm),
   deleteExperience: (id, revision) => ipcRenderer.invoke('ebisu:delete-experience', id, revision),
   copyExperiences: (request) => ipcRenderer.invoke('ebisu:copy-experiences', request),
   skillVariables: (id, folderId) => ipcRenderer.invoke('ebisu:skill-variables', id, folderId),

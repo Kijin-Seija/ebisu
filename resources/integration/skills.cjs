@@ -11,6 +11,10 @@ Usage: skills --terminal <codex|workbuddy|claude|grok|qoder|qodercn|dsh|antigrav
   detail --skill <id|name>
   create --package <directory> --request-id <stable-id>
   install|uninstall --skill <id|name>
+  delete --skill <id|name> --confirm <exact-skill-name>
+    Permanently deletes the skill: removes entries from every installed terminal, all experiences
+    (skill and project), variable definitions and every layer value (including secrets), install
+    records and the central skill directory. Irreversible. Only when the user explicitly asks.
   context --skill <id|name> --path <current-directory>
   file --skill <id|name> --file <relative-text-file>
   run --skill <id|name> --path <current-directory> --script scripts/file -- [args...]
@@ -134,6 +138,11 @@ async function main() {
     case 'install':
     case 'uninstall':
       result = await request(command, { skillId: opts.skill })
+      break
+    case 'delete':
+      if (!opts.skill || !opts.confirm)
+        fail('--skill and --confirm <exact-skill-name> are required; deletion is irreversible')
+      result = await request('delete', { skillId: opts.skill, confirm: opts.confirm })
       break
     case 'context':
       result = await request('context', { skillId: opts.skill, path: opts.path || process.cwd() })

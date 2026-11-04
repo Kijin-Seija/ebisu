@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   NAnchor,
   NAnchorLink,
@@ -376,6 +376,55 @@ function removeExperience(item: SkillExperience): void {
     positiveText: '删除',
     negativeText: '取消',
     onPositiveClick: () => run(() => api.deleteExperience(item.id, item.revision), '经验已删除')
+  })
+}
+/**
+ * 删除整个技能：二次确认需手动输入技能名，与终端协议的 --confirm 保持同一校验。
+ * 删除会移除所有终端入口、全部经验（含项目经验）、变量定义与各层取值（含密钥），不可恢复。
+ */
+function removeSkill(): void {
+  const target = detail.value
+  if (!target) return
+  const typed = ref('')
+  const instance = dialog.error({
+    title: `删除技能 ${target.name}`,
+    content: () =>
+      h('div', { class: 'skill-delete-confirm' }, [
+        h(
+          'p',
+          null,
+          `将从所有已安装终端移除入口，并永久删除此技能的全部经验（含项目经验）、变量定义与各层取值（含加密的敏感值）、安装记录及中央技能文件。此操作不可恢复。`
+        ),
+        h('p', null, `请输入技能名 ${target.name} 以确认：`),
+        h(NInput, {
+          value: typed.value,
+          placeholder: target.name,
+          'data-skill-delete-input': '',
+          'onUpdate:value': (value: string) => {
+            typed.value = value
+            instance.positiveButtonProps = { disabled: value !== target.name }
+          }
+        })
+      ]),
+    positiveText: '删除技能',
+    negativeText: '取消',
+    positiveButtonProps: { disabled: true },
+    onPositiveClick: async () => {
+      if (typed.value !== target.name) return false
+      pending.value = true
+      try {
+        await api.deleteSkill(target.id, typed.value)
+        message.success('技能已删除')
+        selected.value = null
+        await dashboard.refresh()
+        return true
+      } catch (error) {
+        message.error(String(error), { duration: 6000 })
+        return false
+      } finally {
+        pending.value = false
+      }
+    }
   })
 }
 function toggleId(id: string): void {
@@ -768,6 +817,17 @@ onBeforeUnmount(() => {
               </dd>
             </div>
           </dl>
+          <div class="skill-danger">
+            <n-button
+              size="small"
+              type="error"
+              secondary
+              data-skill-delete
+              :disabled="pending"
+              @click="removeSkill"
+              ><template #icon><Trash2 :size="14" /></template>删除技能</n-button
+            >
+          </div>
           <n-tabs v-model:value="tab" type="line" animated>
             <n-tab-pane
               name="install"

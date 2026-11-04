@@ -27,6 +27,9 @@ export function skillRequest(skills: Skills, action: string, input: unknown): un
     case 'uninstall':
       skills.uninstall(id(), base.terminal)
       return { ok: true }
+    case 'delete':
+      // confirm 必须等于技能名；服务端校验，客户端缺参时也会在此返回 400。
+      return { ok: true, ...skills.delete(id(), z.string().min(1).max(128).parse(data.confirm)) }
     case 'context':
       return skills.runtime(id(), base.terminal, z.string().parse(data.path))
     case 'run-context':

@@ -1192,6 +1192,15 @@ button:focus-visible {
 .skill-description {
   line-height: 1.8;
 }
+/* 删除技能为危险操作，单独一行右对齐，避免与安装/卸载按钮混淆。 */
+.skill-danger {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 8px;
+}
+.skill-delete-confirm p {
+  margin: 0 0 8px;
+}
 .skill-meta-list {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
