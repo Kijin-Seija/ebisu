@@ -1,4 +1,5 @@
 import {
+  modelFamilies,
   terminalIconId,
   terminalIds,
   type ModelFamily,
@@ -11,9 +12,10 @@ export function modelFamily(model: string | null): ModelFamily | undefined {
   const value = model?.toLowerCase() ?? ''
   if (/(^|[/\s:_-])(gpt|chatgpt)([\d\s:/_-]|$)/.test(value) || /^(o[134])([\s-]|$)/.test(value))
     return 'gpt'
-  for (const family of ['claude', 'deepseek', 'kimi', 'qwen', 'gemini', 'grok'] as const) {
+  for (const family of modelFamilies.slice(1)) {
     if (new RegExp(`(^|[/\\s:_-])${family}([\\d\\s:/_-]|$)`).test(value)) return family
   }
+  if (/(^|[/\\s:_-])hy([\d\s:/_-]|$)/.test(value)) return 'hunyuan'
   return undefined
 }
 

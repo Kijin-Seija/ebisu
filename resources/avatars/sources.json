@@ -121,6 +121,23 @@
         640
       ],
       "license": "作者声明开放分享与再创作；无统一标准许可证"
+    },
+    "hunyuan": {
+      "file": "model-hunyuan.webp",
+      "source": "用户提供的图片附件（原始全身立绘）",
+      "sourceSha256": "0e2c553fbf25eab53a42e3fc16d74858d913ecd745157802ecedfbe8e034df17",
+      "author": "用户提供，作者未注明",
+      "originalCharacterAuthor": null,
+      "work": null,
+      "timeSeconds": null,
+      "modifications": "裁切为头像；Q 版托盘素材通过局部放大与桌面构图从同一立绘生成，并转换为 WebP",
+      "crop": [
+        150,
+        80,
+        950,
+        880
+      ],
+      "license": "作者与许可未注明；仅作为用户提供的项目素材使用"
     }
   }
 }

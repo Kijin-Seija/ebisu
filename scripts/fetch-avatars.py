@@ -51,7 +51,7 @@ records = {model: record for model, image, record in results}
 record_file.write_text(json.dumps({'repository': 'https://github.com/shuaizenge/ai-girls', 'commit': commit,
     'retrievedOn': '2026-10-22', 'models': records}, ensure_ascii=False, indent=2) + '\n')
 (OUTPUT / 'UPSTREAM-NOTICE.md').write_bytes(download(base + 'NOTICE.md'))
-sheet = Image.new('RGB', (7 * 180, 350), '#eee')
+sheet = Image.new('RGB', (len(frames) * 180, 350), '#eee')
 draw = ImageDraw.Draw(sheet)
 for index, (model, image, _) in enumerate(results):
     image.thumbnail((180, 320))
@@ -59,4 +59,4 @@ for index, (model, image, _) in enumerate(results):
     draw.text((index * 180 + 8, 4), model, fill='black')
 (ROOT / '.smoke').mkdir(exist_ok=True)
 sheet.save(ROOT / '.smoke' / 'avatar-sources.jpg')
-print('Downloaded seven model portraits at commit', commit)
+print(f'Downloaded {len(frames)} upstream model portraits at commit', commit)

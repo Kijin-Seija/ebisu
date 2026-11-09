@@ -74,4 +74,4 @@ if __name__ == '__main__':
     records = json.loads((AVATARS / 'sources.json').read_text())
     for family, record in records['models'].items():
         silhouette(Image.open(AVATARS / record['file'])).save(OUTPUT / f'model-{family}.png')
-    print('Generated seven transparent background portraits; original avatars preserved.')
+    print(f'Generated {len(records["models"])} transparent background portraits; original avatars preserved.')

@@ -1,6 +1,6 @@
 # 头像与商标来源
 
-七种模型头像为 ZipZipPipe 的社区娘化形象，不是模型厂商官方角色。
+七种上游模型头像为 ZipZipPipe 的社区娘化形象，不是模型厂商官方角色。
 素材来自 [ai-girls](https://github.com/shuaizenge/ai-girls)，原作品为
 [《大 AI 和小 AI 们》](https://www.bilibili.com/video/BV1tE9XBbErS/)，
 作者 [ZipZipPipe](https://space.bilibili.com/4168597)。
@@ -19,6 +19,10 @@
 `python3 scripts/make-tray-avatars.py`（依赖 Pillow）生成；主窗口不使用这些文件。
 Q 版素材仍属于上述角色形象的衍生作品，沿用原作者署名与相应用许可条件，
 不代表模型厂商官方角色。
+
+Hunyuan 形象与 Q 版托盘素材由用户提供的图片附件（全身立绘）裁切、变形生成，
+作者及许可未注明；逐项来源与 SHA-256 同样记录于 `sources.json`。该形象不是
+模型厂商官方角色，不沿用上方 ZipZipPipe 素材的作者或许可声明。
 
 DeepSeek 形象原始创作者为上善无形，女仆二次设计为 ZipZipPipe。
 其头像和裁切衍生图依 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)

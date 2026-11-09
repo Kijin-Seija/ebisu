@@ -29,6 +29,7 @@ import { Skills, SkillError, targetSchema } from './skills'
 import { Lan } from './lan'
 import type { ExperienceCopyRequest } from '../shared/skills'
 import {
+  modelFamilies,
   terminalIconId,
   terminalIds,
   type AvatarKey,
@@ -72,7 +73,7 @@ const avatarSchema = z
   .string()
   .regex(
     new RegExp(
-      `^((model|tray):(gpt|claude|deepseek|kimi|qwen|gemini|grok)|terminal:(${terminalIds.join('|')}))$`
+      `^((model|tray):(${modelFamilies.join('|')})|terminal:(${terminalIds.join('|')}))$`
     )
   )
 

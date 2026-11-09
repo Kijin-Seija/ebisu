@@ -28,7 +28,17 @@ const terminalIconIds: Partial<Record<TerminalId, TerminalId>> = { qodercn: 'qod
 export function terminalIconId(id: TerminalId): TerminalId {
   return terminalIconIds[id] ?? id
 }
-export type ModelFamily = 'gpt' | 'claude' | 'deepseek' | 'kimi' | 'qwen' | 'gemini' | 'grok'
+export const modelFamilies = [
+  'gpt',
+  'claude',
+  'deepseek',
+  'kimi',
+  'qwen',
+  'gemini',
+  'grok',
+  'hunyuan'
+] as const
+export type ModelFamily = (typeof modelFamilies)[number]
 export const activityPhases = ['executing', 'waiting', 'error'] as const
 export type ActivityPhase = (typeof activityPhases)[number]
 export type AvatarKey = `model:${ModelFamily}` | `tray:${ModelFamily}` | `terminal:${TerminalId}`

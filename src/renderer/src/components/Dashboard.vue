@@ -134,7 +134,8 @@ const trayLineDrops: Record<string, number> = {
   kimi: 0.076171875,
   qwen: 0.134765625,
   gemini: 0.06640625,
-  grok: 0.07421875
+  grok: 0.07421875,
+  hunyuan: 0.078125
 }
 
 function trayBackgroundDrop(session: SessionActivity): number | undefined {

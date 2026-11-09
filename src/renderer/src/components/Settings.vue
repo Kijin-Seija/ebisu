@@ -5,6 +5,7 @@ import { RefreshCw, Download, Trash2, ImagePlus, Info } from 'lucide-vue-next'
 import { useDashboard } from '../store'
 import LanSettings from './LanSettings.vue'
 import {
+  modelFamilies,
   terminalIconId,
   terminalIds,
   terminalNames,
@@ -24,7 +25,7 @@ const themeOptions = [
   { label: '深色', value: 'dark' }
 ]
 const avatarItems: { key: AvatarKey; label: string }[] = [
-  ...(['gpt', 'claude', 'deepseek', 'kimi', 'qwen', 'gemini', 'grok'] as const).map((key) => ({
+  ...modelFamilies.map((key) => ({
     key: `model:${key}` as AvatarKey,
     label: {
       gpt: 'GPT',
@@ -33,7 +34,8 @@ const avatarItems: { key: AvatarKey; label: string }[] = [
       kimi: 'Kimi',
       qwen: 'Qwen',
       gemini: 'Gemini',
-      grok: 'Grok'
+      grok: 'Grok',
+      hunyuan: 'Hunyuan'
     }[key]
   })),
   ...terminalIds

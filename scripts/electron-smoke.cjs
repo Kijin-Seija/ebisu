@@ -164,7 +164,7 @@ async function main() {
         ? path.join(process.resourcesPath, 'ebisu')
         : path.join(app.getAppPath(), 'resources')
       return ['backgrounds', 'tray'].flatMap((folder) =>
-        ['gpt', 'claude', 'deepseek', 'kimi', 'qwen', 'gemini', 'grok'].map((family) => {
+        ['gpt', 'claude', 'deepseek', 'kimi', 'qwen', 'gemini', 'grok', 'hunyuan'].map((family) => {
           const image = nativeImage.createFromPath(
             path.join(root, 'avatars', folder, `model-${family}.png`)
           )
@@ -216,7 +216,8 @@ async function main() {
       kimi: 0.076171875,
       qwen: 0.134765625,
       gemini: 0.06640625,
-      grok: 0.07421875
+      grok: 0.07421875,
+      hunyuan: 0.078125
     }
     async function assertAvatarBackground(page, count, size, step) {
       const tray = page.url().includes('tray=1')
@@ -822,8 +823,8 @@ async function main() {
     await window.evaluate(() => window.ebisu.chooseAvatar('model:gpt'))
     const customized = await window.evaluate(() => window.ebisu.snapshot())
     assert.ok(customized.settings.avatars['model:gpt'].startsWith(data))
-    // 托盘设置展示七种独立形象；预览地址和卡片背景地址必须读取同一自定义副本。
-    assert.equal(await window.locator('[data-avatar^="tray:"]').count(), 7)
+    // 托盘设置展示八种独立形象；预览地址和卡片背景地址必须读取同一自定义副本。
+    assert.equal(await window.locator('[data-avatar^="tray:"]').count(), 8)
     const readAsset = (url) =>
       app.evaluate(async ({ net }, url) => {
         const response = await net.fetch(url)

@@ -27,6 +27,9 @@ it('识别明确模型标识，不把 provider 或终端名字作为当前模型
   expect(modelFamily('qwen3-coder')).toBe('qwen')
   expect(modelFamily('gemini-3-pro')).toBe('gemini')
   expect(modelFamily('grok-4')).toBe('grok')
+  expect(modelFamily('tencent/hunyuan')).toBe('hunyuan')
+  expect(modelFamily('workbuddy/hy4free')).toBe('hunyuan')
+  expect(modelFamily('hunyuan-a13b')).toBe('hunyuan')
   expect(modelFamily('mygpt-proxy')).toBeUndefined()
   expect(modelFamily(null)).toBeUndefined()
 })
@@ -45,6 +48,9 @@ it('会话头像固定使用终端商标，卡片背景只使用已识别模型�
   )
   expect(trayBackgroundUrl(session({ model: null }), 2)).toBeUndefined()
   expect(trayBackgroundUrl(session({ model: 'mygpt-proxy' }), 2)).toBeUndefined()
+  expect(trayBackgroundUrl(session({ model: 'workbuddy/hy4free' }), 2)).toBe(
+    'ebisu-asset://avatar/model/hunyuan?v=2&background=1&tray=1'
+  )
 })
 it('聊天头像使用发送者模型对应的模型形象，未记录模型时回退到终端默认模型或商标', () => {
   expect(
