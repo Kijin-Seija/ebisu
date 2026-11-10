@@ -13,7 +13,8 @@ const PROTOCOL = `Ebisu chat protocol v1
 Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；失败时 ok:false 且退出码非零)
   protocol
   whoami                                   本终端参与者名称（短主机名/终端），--member 可覆盖
-  devices                                  本机与已配对设备
+  devices                                  本机与已配对设备 {id,name,self,online,metrics}
+  metrics [--device <名称或ID>]            只看负载：{devices:[{id,name,self,online,metrics}]}，--device 过滤单台设备
   channels                                 频道摘要
   create  --channel <id> [--title t] [--devices a,b]      创建/合并频道（设备可写名称）
   send    --channel <id> --to <member> [--type task] (--body t | --body-file <file|->) [--image <png|jpg|gif|webp>]...
@@ -36,6 +37,17 @@ Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；�
   只有图片时正文可省略。history / inbox 中的消息带 attachments[]：{hash,name,mime,size,path}，
   path 为本机图片绝对路径，可直接读取查看；对端图片尚未同步完成时 path 为 null 且 pending:true，稍后重试。
   图片随频道一起删除（delete、对端删除、8 小时闲置清理），需要长期保留的图片请另行保存。
+负载 metrics（每台设备主进程每 30 秒采集，随设备同步传播；对端没有数据或为旧版本时为 null）：
+  at                      采集时间（毫秒时间戳）；对端离线时保留最后一次数据，请按 at 判断是否过期
+  cpu.cores / load1 / load5 / load15   逻辑核数与 1/5/15 分钟平均负载；load1 持续高于 cores 表示 CPU 饱和
+  memory.totalGB          物理内存总量
+  memory.freePct          可用内存百分比（macOS 同 memory_pressure 的 free percentage）；拿不到为 null
+  memory.pressure         macOS 内存压力：normal / warn / critical；拿不到为 null
+  memory.swapUsedMB       已用 swap（MB）；持续增长说明内存不足
+  disk.path / freeGB / totalGB / usedPct   数据卷（/System/Volumes/Data 或 /）剩余与总量；读取失败时 disk 为 null
+  procs                   重任务进程数 {prePush,pixel,vitest,devServer,tsc,eslint}；ps 失败为 null
+  任一项采集失败只把该项置为 null；Ebisu 只采集与展示，不会清理、终止进程或限流。派单前优先选择
+  pressure=normal、disk.freeGB 充足、load1/cores 较低的设备。
 频道对话全部完成后（主控确认结果、无待处理消息）应执行 delete 删除该频道；删除后可用同名 create 重新创建。
 每台设备每 8 小时自动删除最近 8 小时内没有新消息的频道，长期任务请定期 progress 保持活跃。
 `
@@ -267,6 +279,13 @@ async function main() {
       break
     case 'devices':
       result = await api(runtime, 'GET', '/v1/chat/devices')
+      break
+    case 'metrics':
+      result = await api(
+        runtime,
+        'GET',
+        `/v1/chat/metrics${typeof options.device === 'string' && options.device ? `?${new URLSearchParams({ device: options.device })}` : ''}`
+      )
       break
     case 'channels':
       result = await api(runtime, 'GET', '/v1/chat/channels')

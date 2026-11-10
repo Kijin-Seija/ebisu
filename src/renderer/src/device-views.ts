@@ -1,5 +1,6 @@
 import type { Snapshot, FolderView } from '../../shared/types'
 import type { SkillSummary } from '../../shared/skills'
+import type { DeviceMetrics } from '../../shared/lan'
 
 export interface Origin {
   deviceId: string
@@ -50,4 +51,18 @@ export function deviceViews(
     skills.push(...(peer.snapshot?.skills ?? []).map((item) => ({ ...item, ...origin })))
   }
   return { folders, skills }
+}
+
+const pressureLabel = { normal: '正常', warn: '紧张', critical: '严重' } as const
+/** 设备卡片的一行负载摘要；缺失的单项直接省略。 */
+export function metricsSummary(metrics: DeviceMetrics): string {
+  const parts = [`负载 ${metrics.cpu.load1}/${metrics.cpu.cores} 核`]
+  const memory: string[] = []
+  if (metrics.memory.freePct !== null) memory.push(`可用 ${metrics.memory.freePct}%`)
+  if (metrics.memory.pressure) memory.push(`压力${pressureLabel[metrics.memory.pressure]}`)
+  if (memory.length) parts.push(`内存 ${memory.join(' ')}`)
+  if (metrics.memory.swapUsedMB !== null)
+    parts.push(`swap ${(metrics.memory.swapUsedMB / 1024).toFixed(1)} GB`)
+  if (metrics.disk) parts.push(`磁盘剩余 ${metrics.disk.freeGB}/${metrics.disk.totalGB} GB`)
+  return parts.join(' · ')
 }

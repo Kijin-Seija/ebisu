@@ -7,10 +7,43 @@ export interface DeviceIdentity {
   name: string
   protocol: number
 }
+/** macOS 内存压力等级：kern.memorystatus_vm_pressure_level 的 1/2/4。 */
+export type MemoryPressure = 'normal' | 'warn' | 'critical'
+/**
+ * 设备负载快照：主进程每 30 秒采集一次，随局域网快照同步给已配对设备。
+ * 只用于观测与派单参考，Ebisu 不会据此清理、终止进程或限流。
+ * 单项采集失败时该项为 null，不影响其他字段。
+ */
+export interface DeviceMetrics {
+  /** 采集完成时间（毫秒时间戳）；对端离线时保留最后一次收到的数据，按 at 判断新旧。 */
+  at: number
+  cpu: {
+    /** 逻辑核数。 */
+    cores: number
+    /** 1/5/15 分钟平均负载（os.loadavg）。 */
+    load1: number
+    load5: number
+    load15: number
+  }
+  memory: {
+    totalGB: number
+    /** 系统可用内存百分比（macOS 为 kern.memorystatus_level，同 memory_pressure 的 free percentage）。 */
+    freePct: number | null
+    pressure: MemoryPressure | null
+    /** 已用 swap（MB，vm.swapusage）。 */
+    swapUsedMB: number | null
+  }
+  /** 数据卷容量：macOS 优先 /System/Volumes/Data，否则 /；读取失败为 null。 */
+  disk: { path: string; freeGB: number; totalGB: number; usedPct: number } | null
+  /** 重任务进程计数（ps 命令行匹配）；ps 失败为 null。 */
+  procs: Record<string, number> | null
+}
 export interface SharedSnapshot {
   device: DeviceIdentity
   folders: FolderView[]
   skills: SkillSummary[]
+  /** 来源设备最新负载；旧版本不发送该字段，接收方按 null 处理。 */
+  metrics?: DeviceMetrics | null
 }
 export interface RemoteDevice extends DeviceIdentity {
   address: string

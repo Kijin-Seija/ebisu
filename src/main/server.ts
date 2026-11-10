@@ -212,6 +212,10 @@ async function chatRoute(
     case 'GET /v1/chat/devices':
       send(response, 200, { ok: true, devices: chat.devices() })
       return
+    case 'GET /v1/chat/metrics':
+      // 只读负载视图：?device= 按设备 ID 或名称过滤；对端没有数据时 metrics 为 null。
+      send(response, 200, { ok: true, devices: chat.deviceMetrics(query('device')) })
+      return
     case 'GET /v1/chat/channels':
       send(response, 200, { ok: true, channels: chat.summaries() })
       return

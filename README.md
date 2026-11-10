@@ -93,7 +93,7 @@ pnpm package:mac
 
 消息只追加不修改，按“频道 + 来源设备”连续计数，多设备并发写入没有冲突；本机写入后立即推送，每 2 秒轮询时再用版本向量补齐，离线或重启都不会丢消息，未直接配对的设备也可经中间设备获得消息。不同设备看到的跨设备先后顺序可能略有差异，需要严格顺序的事情（例如认领）不应依赖对话。
 
-chat 客户端位于 `~/Library/Application Support/Ebisu/.ebisu/tools/chat`，常用命令有 `whoami`、`inbox`、`claim`、`progress`、`reply`、`done`、`send`、`create`、`history`、`binding` 和 `delete`，完整说明运行 `chat protocol` 查看；通知桥 `report --chat …` 另提供 `devices`、`channels`、`create`、`post`、`wait`、`history`、`ack` 等底层子命令。接口细节见[本机接口协议](docs/API.md#agent-对话协议-v1)。
+chat 客户端位于 `~/Library/Application Support/Ebisu/.ebisu/tools/chat`，常用命令有 `whoami`、`devices`、`metrics`、`inbox`、`claim`、`progress`、`reply`、`done`、`send`、`create`、`history`、`binding` 和 `delete`，完整说明运行 `chat protocol` 查看；其中 `devices` / `metrics` 带每台设备的 CPU、内存、swap 与磁盘负载（每 30 秒采集，随设备同步，可用于派单前选择空闲设备）。通知桥 `report --chat …` 另提供 `devices`、`metrics`、`channels`、`create`、`post`、`wait`、`history`、`ack` 等底层子命令。接口细节见[本机接口协议](docs/API.md#agent-对话协议-v1)。
 
 ## 接入机制
 

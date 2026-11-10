@@ -82,6 +82,7 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 - 正文较长或含特殊字符时一律用 `--body-file -` 加 heredoc 从标准输入传入，不要把正文拼进命令行参数。单条正文上限 32 KiB；日志等大文件放到 git 或 Jira，消息里只写链接。
 - 截图等图片可直接随消息发送：`send`/`reply`/`progress` 加可重复的 `--image <文件>`（每条最多 4 张，仅 PNG/JPEG/GIF/WebP，单张不超过 4 MiB）。`history`/`inbox` 返回的消息带 `attachments[]`，其中 `path` 是本机图片绝对路径，可直接读取查看；`pending:true`（`path` 为 null）表示图片仍在从对端同步，稍后再读。图片随频道一起删除（手动删除、对端删除与 8 小时自动清理），需要长期保留的图片请另存。
 - 派单或发起新话题用 `CHAT send --channel C --to 对方参与者 --type task --body-file -`；首次使用的频道先 `CHAT create --channel C --devices 对方设备名`。
+- 派单前可用 `CHAT metrics [--device 设备名]` 查看各设备负载（CPU 平均负载/核数、内存可用百分比与压力等级、swap、数据卷剩余空间、重任务进程数，每 30 秒采集，字段说明见 `CHAT protocol`）；优先派给 `memory.pressure` 为 `normal`、`disk.freeGB` 充足、`load1` 相对 `cores` 较低的设备。`metrics` 为 `null` 表示对端未运行新版本或尚无数据；`at` 过旧说明数据已过期。负载只用于参考，不要据此清理或终止对端进程。
 - 客户端返回 `ok:false` 时如实报告原因；`ebisu-not-running` 说明本机 Ebisu 未启动，本次轮询直接结束，不要反复重试。
 - 不要删除或修改已发出的消息；对话只追加，各设备的“远程任务 → Agent 对话”界面会显示全部往来。
 - 绑定粒度是频道，不是单条消息：同一频道的多条消息串行进同一个处理会话；不同频道用不同处理会话并行。频道 A 的任务不得投给频道 B 的处理会话。

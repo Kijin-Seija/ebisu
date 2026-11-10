@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { NButton, NInput, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import { useDashboard } from '../store'
+import { metricsSummary } from '../device-views'
 import type { NearbyDevice, RemoteDevice } from '../../../shared/lan'
 
 const dashboard = useDashboard()
@@ -139,6 +140,13 @@ async function request(device: NearbyDevice) {
             {{
               peer.lastSeen ? `最后更新 ${new Date(peer.lastSeen).toLocaleString()}` : '尚未同步'
             }}
+          </p>
+          <p
+            v-if="peer.snapshot?.metrics"
+            class="section-meta lan-card-meta"
+            :title="`采集于 ${new Date(peer.snapshot.metrics.at).toLocaleString()}`"
+          >
+            {{ metricsSummary(peer.snapshot.metrics) }}
           </p>
           <p v-if="peer.error" class="lan-error">{{ peer.error }}</p>
           <n-button size="small" :disabled="busy" @click="forget(peer.id, peer.name)">

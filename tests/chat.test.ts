@@ -231,7 +231,7 @@ it('本机 HTTP 接口与 report --chat 命令行', async () => {
     expect(await run(['--chat', 'nope'])).toEqual({ ok: false, reason: 'unknown-chat-command' })
     const devices = await run(['--chat', 'devices'])
     expect(devices.devices).toEqual([
-      { id: device.id, name: 'local-mac', self: true, online: true }
+      { id: device.id, name: 'local-mac', self: true, online: true, metrics: null }
     ])
   } finally {
     await server.close()

@@ -11,6 +11,7 @@ import { generate } from 'selfsigned'
 import { z } from 'zod'
 import type {
   DeviceIdentity,
+  DeviceMetrics,
   LanView,
   PairOutcome,
   RemoteCommand,
@@ -25,6 +26,7 @@ import type { Store } from './database'
 import { SkillTransfer, packageHash } from './skill-transfer'
 import { RemoteCommands, isRemoteCommandTerminal } from './remote-commands'
 import { Chat, matchesDevice, type ChatPush } from './chat'
+import { metricsSchema } from './metrics'
 
 const PROTOCOL = 1
 const MAX_BODY = 12 * 1024 * 1024
@@ -91,7 +93,8 @@ const summarySchema = z.object({
     .array(z.object({ terminal: z.enum(terminalIds), installedAt: z.number() }))
     .max(5)
 })
-const sharedSchema = z.object({
+/** 对端快照校验；导出供兼容性测试使用。 */
+export const sharedSchema = z.object({
   device: identitySchema,
   folders: z
     .array(
@@ -115,7 +118,9 @@ const sharedSchema = z.object({
       })
     )
     .max(10000),
-  skills: z.array(summarySchema).max(10000)
+  skills: z.array(summarySchema).max(10000),
+  // 负载为可选扩展：旧版本对端不发送；内容不合法时降为 null，不能让整份快照失败、设备显示离线。
+  metrics: metricsSchema.nullish().catch(null)
 })
 const exportSchema = z.object({
   skillId: z.string().uuid(),
@@ -169,6 +174,8 @@ interface Options {
   request?: () => void
   /** 测试可以关闭真实组播，但 HTTPS 通信仍走真实 socket。 */
   discovery?: boolean
+  /** 本机最新负载；随快照发布给已配对设备，未提供或尚未采集时为 null。 */
+  metrics?: () => DeviceMetrics | null
 }
 
 /** LAN 服务只发布本机白名单 DTO；缓存永远不能进入本机目录、租约或安装业务表。 */
@@ -235,12 +242,20 @@ export class Lan {
     this.chat.attach(
       {
         list: () => [
-          { id: this.identity.id, name: this.identity.name, self: true, online: true },
+          {
+            id: this.identity.id,
+            name: this.identity.name,
+            self: true,
+            online: true,
+            metrics: this.localMetrics()
+          },
           ...[...this.peers.values()].map((peer) => ({
             id: peer.device.id,
             name: peer.device.name,
             self: false,
-            online: this.online(peer)
+            online: this.online(peer),
+            // 旧版本对端的快照没有 metrics；离线设备保留最后一次收到的数据，由 at 判断新旧。
+            metrics: peer.snapshot?.metrics ?? null
           }))
         ],
         resolve: (value) => {
@@ -254,6 +269,13 @@ export class Lan {
       },
       (devices, payload) => this.pushChat(devices, payload)
     )
+  }
+  private localMetrics(): DeviceMetrics | null {
+    try {
+      return this.options.metrics?.() ?? null
+    } catch {
+      return null
+    }
   }
   /** 对端最近一次快照在 15 秒内成功即视为在线。 */
   private online(peer: Peer): boolean {
@@ -581,7 +603,9 @@ export class Lan {
               const shared = sharedSchema.parse({
                 device: this.device(),
                 folders: local.folders,
-                skills: local.skills
+                skills: local.skills,
+                // 负载随快照一起被对端每 2 秒轮询拉取；采集周期 30 秒，期间 ETag 不变。
+                metrics: this.localMetrics()
               })
               const etag = `"${packageHash(shared)}"`
               if (req.headers['if-none-match'] === etag) send(304, undefined, etag)

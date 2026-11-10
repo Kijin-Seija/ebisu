@@ -297,7 +297,7 @@ export class Chat {
     this.directory = {
       list: () => {
         const self = this.localDevice()
-        return [{ id: self.id, name: self.name, self: true, online: true }]
+        return [{ id: self.id, name: self.name, self: true, online: true, metrics: null }]
       },
       resolve: (value) => {
         const self = this.localDevice()
@@ -358,6 +358,19 @@ export class Chat {
 
   devices(): ChatDevice[] {
     return this.directory.list()
+  }
+
+  /**
+   * 设备负载：返回本机与已配对设备的 { id, name, self, online, metrics }。
+   * device 可写设备 ID 或名称（忽略大小写与 .local）；未匹配到已配对设备时返回 404。
+   */
+  deviceMetrics(device?: string): ChatDevice[] {
+    const devices = this.devices()
+    if (!device?.trim()) return devices
+    const id = this.directory.resolve(device.trim())
+    const matched = devices.filter((item) => item.id === id)
+    if (!matched.length) throw new SkillError(404, `未找到已配对设备：${device}`)
+    return matched
   }
 
   channel(id: string): ChatChannel | null {

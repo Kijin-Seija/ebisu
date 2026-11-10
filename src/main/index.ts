@@ -27,6 +27,7 @@ import { TaskTitles } from './task-titles'
 import { DshSessionFacts, resumedAfterExit } from './dsh-session-facts'
 import { Skills, SkillError, targetSchema } from './skills'
 import { Lan } from './lan'
+import { MetricsSampler } from './metrics'
 import type { ExperienceCopyRequest } from '../shared/skills'
 import {
   modelFamilies,
@@ -58,6 +59,8 @@ let taskTitles: TaskTitles
 let dshSessionFacts: DshSessionFacts
 let skills: Skills
 let lan: Lan
+/** 本机负载采集器：每 30 秒采集一次，随局域网快照同步给已配对设备，并经 chat devices/metrics 查询。 */
+const metrics = new MetricsSampler()
 let service: Awaited<ReturnType<typeof startServer>> | undefined
 let serviceError: string | undefined
 let watcher: FSWatcher | undefined
@@ -546,8 +549,11 @@ async function boot(): Promise<void> {
     snapshot: async () => {
       const local = await snapshot()
       return { folders: local.folders, skills: local.skills }
-    }
+    },
+    metrics: () => metrics.current()
   })
+  // 采集只读、外部命令带超时，失败降级为 null，不阻塞启动。
+  metrics.start()
   await lan.initialize()
   // 对话频道闲置自动清理：启动后稍后执行一次，之后每 8 小时一次；lan.close 时停止。
   lan.chat.startCleanup()
@@ -710,6 +716,7 @@ else {
     clearInterval(expiryTimer)
     clearInterval(developmentParentTimer)
     clearTimeout(refreshTimer)
+    metrics.stop()
     // watcher、Git 或 HTTP 清理异常不能无限占用单实例锁。数据库写入本身同步提交，
     // 兜底退出前尽力关闭数据库；不会等待外部文件系统或连接永久挂起。
     const exit = () => {

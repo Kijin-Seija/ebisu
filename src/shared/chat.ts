@@ -1,3 +1,5 @@
+import type { DeviceMetrics } from './lan'
+
 /**
  * Agent 对话频道：跨设备复制的只追加消息流。
  * 频道由参与设备共同持有完整副本，agent 只访问本机 Ebisu；设备之间经已配对的 mTLS 通道同步。
@@ -78,4 +80,6 @@ export interface ChatDevice {
   name: string
   self: boolean
   online: boolean
+  /** 设备最新负载：本机为本地采集结果，对端为最近一次同步的数据；没有数据（含旧版本对端）时为 null。 */
+  metrics: DeviceMetrics | null
 }

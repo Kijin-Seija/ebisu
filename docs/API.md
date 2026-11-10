@@ -121,7 +121,7 @@ HTTP 创建载荷中的 `package.files` 为 `{相对路径:{content,encoding?:"u
 
 除上述配对接口外，必须通过已配对证书的双向 TLS 认证。服务拒绝浏览器 Origin；写操作只有上表列出的经验复制、对话复制和远程任务，不提供活动上报、变量读取、经验修改或删除、技能安装或运行等其他操作。发现信息中的地址不能建立信任，客户端必须先校验证书指纹再发送 HTTP 数据；目标设备记录的是 TLS 客户端证书指纹，不采用请求体自报的指纹。
 
-设备身份为 `{ id, name, protocol }`；快照为 `{ device, folders, skills }`，仅发布本机数据。技能导出为 `{ skillId, package, hash }`，`package.variables` 使用当前变量定义并去掉 `defaultValue`，不包含任何保存的变量取值。哈希采用对象键稳定排序后的 JSON SHA-256。请求总期限五秒，接收响应限制 12 MiB；技能包仍遵守原有 8 MiB、256 文件等校验。
+设备身份为 `{ id, name, protocol }`；快照为 `{ device, folders, skills, metrics }`，仅发布本机数据。`metrics` 为本机最新负载（见下文“设备负载”），随快照每 2 秒被已配对设备轮询拉取；旧版本既不发送也不识别该字段（未知字段被忽略），接收方把缺失或不合法的 `metrics` 视为 `null`，不影响快照与在线状态。技能导出为 `{ skillId, package, hash }`，`package.variables` 使用当前变量定义并去掉 `defaultValue`，不包含任何保存的变量取值。哈希采用对象键稳定排序后的 JSON SHA-256。请求总期限五秒，接收响应限制 12 MiB；技能包仍遵守原有 8 MiB、256 文件等校验。
 
 远程任务请求为 `{ requestId, terminal, path, prompt }`，目前支持 `codex`、`claude`、`dsh` 和 `qoder`。`path` 必须是接收设备上的绝对目录；请求不会经过 shell。终端适配器必须使用自己的非交互 JSON 模式并返回真实会话 ID（例如 Codex 的 `thread_id`、Claude 的 `session_id`）；没有真实 ID 的结果会失败，不能用 Ebisu 内部任务 ID 冒充终端会话。只要终端本身持久化该会话，它就会出现在该终端的会话列表中。任务状态为 `queued`、`running`、`waiting`、`completed`、`failed` 或 `cancelled`，完成后返回退出码、摘要、截断后的输出和错误信息。`requestId` 在同一来源设备上幂等，任务记录保存在接收设备数据库中；应用重启会把未完成任务标记为失败，不会自动重启 Agent。只有接收设备显式开启“允许远程 Agent 自动执行”后，已配对设备才能创建任务；该开关默认关闭，当前界面已改为“聊天室”，不再提供远程任务入口。
 
@@ -146,7 +146,8 @@ preload 新增设备配置、请求配对/确认或拒绝请求、解除配对�
 
 | 接口                            | 行为                                                                                                               |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `GET /v1/chat/devices`          | 本机与已配对设备 `{ id, name, self, online }`                                                                      |
+| `GET /v1/chat/devices`          | 本机与已配对设备 `{ id, name, self, online, metrics }`；`metrics` 见“设备负载”，没有数据时为 `null`                |
+| `GET /v1/chat/metrics`          | `?device=` 可选（设备 ID 或名称，忽略大小写与 .local）；返回同结构的 `devices`，专用于负载查询，未知设备 404       |
 | `GET /v1/chat/channels`         | 频道摘要（含消息数与最后一条消息）                                                                                 |
 | `POST /v1/chat/channels`        | `{ id, title?, devices?, members? }` 创建或合并频道；`devices` 可写设备 ID 或名称（忽略大小写与 .local）           |
 | `POST /v1/chat/channels/delete` | `{ id }` 删除频道及全部消息（频道 ID 可含 `/`，因此放在请求体中），返回删除标记                                    |
@@ -164,6 +165,7 @@ preload 新增设备配置、请求配对/确认或拒绝请求、解除配对�
 
 ```sh
 report --terminal claude --chat devices
+report --terminal claude --chat metrics --device almondeMac22-Mini
 report --terminal claude --chat create --channel bug/STRATEGY-4287 --title "..." --devices almondeMac22-Mini,jiedeMac-mini11
 # 正文从 stdin 读取，内容不经 shell 展开
 report --terminal claude --chat post --channel bug/STRATEGY-4287 --to almondeMac22-Mini/qoder --type task --body-file - < body.md
@@ -171,8 +173,26 @@ report --terminal qoder --chat wait --channel 'control,bug/STRATEGY-4287' --time
 report --terminal qoder --chat history --channel bug/STRATEGY-4287
 ```
 
-`--member` 默认为 `Ebisu 设备名/终端`（例如 `almondeMac22-Mini/qoder`）；设备名即配对时双方看到的稳定名称，读取失败时才回退到 `短主机名/终端`，避免 macOS hostname 随网络变化导致身份漂移。`wait` 的 `--timeout` 应小于所在终端单条命令的超时上限。`report --chat` 提供 `devices`、`channels`、`create`、`post`、`wait`、`history` 和 `ack`。
+`--member` 默认为 `Ebisu 设备名/终端`（例如 `almondeMac22-Mini/qoder`）；设备名即配对时双方看到的稳定名称，读取失败时才回退到 `短主机名/终端`，避免 macOS hostname 随网络变化导致身份漂移。`wait` 的 `--timeout` 应小于所在终端单条命令的超时上限。`report --chat` 提供 `devices`、`metrics`、`channels`、`create`、`post`、`wait`、`history` 和 `ack`。
 
-绑定终端后，数据目录下的 `.ebisu/tools/chat` 客户端提供面向 agent 工作流的高层命令：`whoami`、`devices`、`channels`、`create`、`send`、`inbox`、`claim`、`progress`、`reply`、`done`、`history`、`binding`、`delete`，`send`/`progress`/`reply` 支持可重复的 `--image`。认领、进展与完成都以 `replyTo` 记录在对话中，`inbox` 只依据对话内容计算；`progress`/`reply`/`done` 未传 `--member` 时会沿用本设备上已认领该消息的参与者。运行 `chat protocol` 查看完整说明，轮询与派发流程见管理技能 `ebisu-chat`。
+绑定终端后，数据目录下的 `.ebisu/tools/chat` 客户端提供面向 agent 工作流的高层命令：`whoami`、`devices`、`metrics`、`channels`、`create`、`send`、`inbox`、`claim`、`progress`、`reply`、`done`、`history`、`binding`、`delete`，`send`/`progress`/`reply` 支持可重复的 `--image`。认领、进展与完成都以 `replyTo` 记录在对话中，`inbox` 只依据对话内容计算；`progress`/`reply`/`done` 未传 `--member` 时会沿用本设备上已认领该消息的参与者。运行 `chat protocol` 查看完整说明，轮询与派发流程见管理技能 `ebisu-chat`。
 
 界面“聊天室”页面以对话流展示频道内容与图片缩略图，可删除频道。
+
+### 设备负载
+
+每台设备的主进程启动后立即采集一次本机负载，之后每 30 秒一次；随局域网快照同步给已配对设备，接收方缓存最近一次数据（持久化在本机配对记录中）。`chat devices` 与 `chat metrics [--device <名称>]` 返回每台设备的 `metrics`，对端没有数据或运行旧版本时为 `null`；对端离线时保留最后一次数据，调用方应按 `at` 判断是否过期。Ebisu 只采集和展示，不做清理、终止进程或限流。
+
+| 字段                                           | 含义                                                                                                           |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `at`                                           | 采集完成时间（毫秒时间戳）                                                                                     |
+| `cpu.cores`                                    | 逻辑核数                                                                                                       |
+| `cpu.load1` / `load5` / `load15`               | 1/5/15 分钟平均负载（`os.loadavg`）；`load1` 持续高于 `cores` 表示 CPU 饱和                                    |
+| `memory.totalGB`                               | 物理内存总量                                                                                                   |
+| `memory.freePct`                               | 可用内存百分比；macOS 读取 `kern.memorystatus_level`（同 `memory_pressure` 的 free percentage）                |
+| `memory.pressure`                              | macOS `kern.memorystatus_vm_pressure_level`：1 `normal`、2 `warn`、4 `critical`；其他值或失败为 `null`         |
+| `memory.swapUsedMB`                            | 已用 swap（`vm.swapusage`，MB）                                                                                |
+| `disk.path` / `freeGB` / `totalGB` / `usedPct` | 数据卷容量：macOS 优先 `/System/Volumes/Data`，不存在时 `/`；读取失败时 `disk` 为 `null`                       |
+| `procs`                                        | 重任务进程数 `{ prePush, pixel, vitest, devServer, tsc, eslint }`（`ps -axo command` 按行匹配）；失败为 `null` |
+
+所有外部命令（`sysctl`、`ps`）不经 shell 执行，各自 3 秒超时；任一项失败只把该项置为 `null`，其余字段照常输出，采集失败时保留上一次结果。

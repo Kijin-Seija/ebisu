@@ -559,7 +559,7 @@ async function defaultMember(runtime, terminal) {
 
 /**
  * Agent 对话子命令；输出单行 JSON，任何情况下都以 0 退出。
- * devices | channels | create | post | wait | history | ack
+ * devices | metrics | channels | create | post | wait | history | ack
  */
 async function chatMain(args, runtime, terminal) {
   const command = typeof args.chat === 'string' ? args.chat : ''
@@ -577,6 +577,15 @@ async function chatMain(args, runtime, terminal) {
     case 'devices':
       result = await chatRequest(runtime, 'GET', '/v1/chat/devices', undefined, 5000)
       break
+    case 'metrics': {
+      // 只读负载视图；--device 按设备名称或 ID 过滤。
+      const query =
+        typeof args.device === 'string' && args.device
+          ? `?${new URLSearchParams({ device: args.device })}`
+          : ''
+      result = await chatRequest(runtime, 'GET', `/v1/chat/metrics${query}`, undefined, 5000)
+      break
+    }
     case 'channels':
       result = await chatRequest(runtime, 'GET', '/v1/chat/channels', undefined, 5000)
       break

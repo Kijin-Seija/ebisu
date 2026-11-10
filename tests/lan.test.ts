@@ -20,6 +20,7 @@ import { renameSkillPackage } from '../src/shared/skill-import'
 import { deviceViews } from '../src/renderer/src/device-views'
 import type { SkillPackage } from '../src/shared/skills'
 import type { Snapshot } from '../src/shared/types'
+import type { DeviceMetrics } from '../src/shared/lan'
 
 const discoveryEvents = vi.hoisted(() => ({ browsers: [] as import('node:events').EventEmitter[] }))
 vi.mock('bonjour-service', async () => {
@@ -83,7 +84,7 @@ const pkg = (name = 'remote-tool'): SkillPackage => ({
     }
   ]
 })
-async function make(discovery = true) {
+async function make(discovery = true, metrics?: () => DeviceMetrics | null) {
   const directory = path.join(root, `device-${instances.length}`)
   const home = path.join(directory, 'home')
   mkdirSync(home, { recursive: true })
@@ -99,6 +100,7 @@ async function make(discovery = true) {
     discovery,
     now: () => at,
     changed() {},
+    metrics,
     snapshot: async () => ({
       folders: store.folders().map((folder) => ({
         ...folder,
@@ -845,4 +847,43 @@ it('经验复制到已配对设备：项目映射到对端项目、重复跳过�
   // 对端离线时给出明确错误。
   at += 16000
   await expect(a.lan.copyExperiences(request)).rejects.toThrow('离线')
+})
+
+it('设备负载随快照同步：新版本互相可见，旧版本对端（不发送负载）显示为 null', async () => {
+  let current: DeviceMetrics = {
+    at: 1,
+    cpu: { cores: 8, load1: 1.5, load5: 1, load15: 0.5 },
+    memory: { totalGB: 16, freePct: 56, pressure: 'normal', swapUsedMB: 0 },
+    disk: { path: '/System/Volumes/Data', freeGB: 3.2, totalGB: 460, usedPct: 99.3 },
+    procs: { prePush: 0, pixel: 0, vitest: 2, devServer: 0, tsc: 0, eslint: 0 }
+  }
+  // A 为新版本并提供负载；B 未提供负载，等价于旧版本对端不发送该字段。
+  const a = await make(true, () => current)
+  const b = await make()
+  await pair(a, b)
+  const byName = (devices: { name: string }[], name: string) =>
+    devices.find((device) => device.name === name) as Record<string, unknown>
+  expect(byName(b.lan.chat.devices(), 'Computer A')).toMatchObject({
+    self: false,
+    online: true,
+    metrics: current
+  })
+  expect(byName(b.lan.chat.devices(), 'Computer B')).toMatchObject({ self: true, metrics: null })
+  expect(byName(a.lan.chat.devices(), 'Computer A')).toMatchObject({ self: true, metrics: current })
+  expect(byName(a.lan.chat.devices(), 'Computer B')).toMatchObject({ online: true, metrics: null })
+  expect(b.lan.view().peers[0].snapshot?.metrics).toEqual(current)
+  // 新一轮采集后 ETag 变化，对端下次轮询即拿到新负载。
+  current = { ...current, at: 2, cpu: { ...current.cpu, load1: 7.25 } }
+  at += 1000
+  await b.lan.poll()
+  expect(b.lan.chat.deviceMetrics('computer a')[0].metrics).toMatchObject({
+    at: 2,
+    cpu: { load1: 7.25 }
+  })
+  // 对端离线后保留最后一次数据，调用方按 at 判断新旧。
+  at += 60_000
+  expect(byName(b.lan.chat.devices(), 'Computer A')).toMatchObject({
+    online: false,
+    metrics: { at: 2 }
+  })
 })
