@@ -985,3 +985,190 @@ it('消息携带或从活跃会话自动推断发送者 model，并随同步复�
     'anthropic/claude-opus-4-6'
   ])
 })
+
+it('changes 变更信号：版本不同立即返回，否则等到下一次变更或超时', async () => {
+  chat.createChannel({ id: 'c' })
+  const first = await chat.changes({ after: -1, timeout: 5 })
+  expect(first.changed).toBe(true)
+  const started = Date.now()
+  const pending = chat.changes({ after: first.revision, timeout: 5 })
+  setTimeout(() => chat.post({ channel: 'c', from: 'main', body: 'wake' }), 100)
+  const woke = await pending
+  expect(woke).toEqual({ revision: first.revision + 1, changed: true })
+  expect(Date.now() - started).toBeLessThan(2000)
+  expect(await chat.changes({ after: woke.revision, timeout: 0.1 })).toEqual({
+    revision: woke.revision,
+    changed: false
+  })
+})
+
+/** 启动 chat 客户端子进程，逐行收集 stdout，便于测试常驻的 watch 与阻塞的 wait。 */
+function launch(runtimeFile: string, args: string[]) {
+  const cli = path.join(__dirname, '../resources/integration/chat.cjs')
+  const child = spawn(process.execPath, [cli, '--runtime', runtimeFile, ...args], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+  })
+  const lines: Record<string, any>[] = []
+  let buffer = ''
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk
+    let index
+    while ((index = buffer.indexOf('\n')) >= 0) {
+      lines.push(JSON.parse(buffer.slice(0, index)))
+      buffer = buffer.slice(index + 1)
+    }
+  })
+  child.stdin.end()
+  const exited = new Promise<number>((resolve) => child.once('close', (code) => resolve(code ?? 0)))
+  /** 等到收集到至少 count 行输出。 */
+  const until = async (count: number, ms = 8000) => {
+    const deadline = Date.now() + ms
+    while (lines.length < count) {
+      if (Date.now() > deadline) throw new Error(`timeout waiting for ${count} lines: ${lines}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    return lines
+  }
+  return { child, lines, exited, until }
+}
+
+it('chat 客户端 wait：无消息超时返回，新消息到达立即唤醒，--new-only 忽略已有消息，未运行时报错', async () => {
+  const runtimeFile = path.join(root, 'runtime.json')
+  const server = await startServer(store, runtimeFile, () => {}, undefined, chat)
+  const as = (who: string) => ['--terminal', 'claude', '--member', who]
+  try {
+    chat.createChannel({ id: 'control', members: ['main', 'w/claude'] })
+    // 无待处理消息：按 --timeout-seconds 超时
+    let started = Date.now()
+    let run = launch(runtimeFile, ['wait', ...as('w/claude'), '--timeout-seconds', '1'])
+    expect(await run.exited).toBe(0)
+    expect(run.lines).toEqual([{ ok: true, timeout: true }])
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900)
+    // 阻塞中收到定向消息立即唤醒，输出与 inbox 相同格式；超过服务端 requestTimeout(3s) 仍有效
+    started = Date.now()
+    run = launch(runtimeFile, ['wait', ...as('w/claude'), '--timeout-seconds', '30'])
+    await new Promise((resolve) => setTimeout(resolve, 3500))
+    const task = chat.post({ channel: 'control', from: 'main', to: 'w/claude', body: '修复 A' })
+    expect(await run.exited).toBe(0)
+    expect(Date.now() - started).toBeLessThan(8000)
+    expect(run.lines).toHaveLength(1)
+    expect(run.lines[0]).toMatchObject({ ok: true, member: 'w/claude', inProgress: [] })
+    expect(run.lines[0].tasks.map((t: { id: string }) => t.id)).toEqual([task.id])
+    // tasks 非空时默认立即返回；--new-only 只在出现启动时没有的消息时返回
+    run = launch(runtimeFile, ['wait', ...as('w/claude'), '--timeout-seconds', '5'])
+    expect(await run.exited).toBe(0)
+    expect(run.lines[0].tasks).toHaveLength(1)
+    run = launch(runtimeFile, ['wait', ...as('w/claude'), '--new-only', '--timeout-seconds', '1'])
+    expect(await run.exited).toBe(0)
+    expect(run.lines).toEqual([{ ok: true, timeout: true }])
+    run = launch(runtimeFile, ['wait', ...as('w/claude'), '--new-only', '--timeout-seconds', '30'])
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    // 发给别人的消息与非定向消息不会唤醒
+    chat.post({ channel: 'control', from: 'main', to: 'other', body: 'x' })
+    chat.post({ channel: 'control', from: 'main', body: 'broadcast' })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(run.lines).toEqual([])
+    const second = chat.post({ channel: 'control', from: 'main', to: 'w/claude', body: '修复 B' })
+    expect(await run.exited).toBe(0)
+    expect(run.lines[0].tasks.map((t: { id: string }) => t.id)).toEqual([task.id, second.id])
+  } finally {
+    await server.close()
+  }
+  // Ebisu 未运行（端口无人监听）：与其他命令一致返回 ok:false 与非零退出码
+  const stale = path.join(root, 'stale-runtime.json')
+  writeFileSync(stale, JSON.stringify({ port: 1, token: 'x' }))
+  const down = launch(stale, ['wait', '--terminal', 'claude', '--member', 'w/claude'])
+  expect(await down.exited).toBe(1)
+  expect(down.lines).toEqual([{ ok: false, reason: 'ebisu-not-running' }])
+}, 40000)
+
+it('chat 客户端 watch：先输出已有待处理消息，按 id 去重推送新消息，断开时非零退出', async () => {
+  const runtimeFile = path.join(root, 'runtime.json')
+  const server = await startServer(store, runtimeFile, () => {}, undefined, chat)
+  let closed = false
+  const run = (() => {
+    chat.createChannel({ id: 'control', members: ['main', 'w/claude'] })
+    chat.post({ channel: 'control', from: 'main', to: 'w/claude', body: 'x'.repeat(300) })
+    return launch(runtimeFile, ['watch', '--terminal', 'claude', '--member', 'w/claude'])
+  })()
+  try {
+    const [initial] = await run.until(1)
+    expect(initial).toMatchObject({ channel: 'control', from: 'main', type: 'text' })
+    expect(Object.keys(initial).sort()).toEqual(
+      ['body', 'channel', 'createdAt', 'from', 'id', 'type'].sort()
+    )
+    expect(initial.body).toBe(`${'x'.repeat(200)}…`)
+    const next = chat.post({ channel: 'control', from: 'main', to: 'w/claude', body: '第二条' })
+    const lines = await run.until(2)
+    expect(lines[1]).toMatchObject({ id: next.id, body: '第二条' })
+    // 无关变更（自己的进展标记、其他人的消息）不会重复输出
+    chat.post({
+      channel: 'control',
+      from: 'w/claude',
+      type: 'progress',
+      replyTo: next.id,
+      body: '…'
+    })
+    chat.post({ channel: 'control', from: 'main', to: 'other', body: 'y' })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(run.lines).toHaveLength(2)
+    await server.close()
+    closed = true
+    expect(await run.exited).toBe(1)
+    expect(run.lines[2]).toMatchObject({ ok: false })
+  } finally {
+    if (!closed) await server.close()
+    run.child.kill()
+  }
+}, 30000)
+
+it('chat 客户端 wait：主进程没有 changes 接口（旧版本）时退化为间隔查询', async () => {
+  const runtimeFile = path.join(root, 'runtime.json')
+  const server = await startServer(store, runtimeFile, () => {}, undefined, chat)
+  const { port, token } = JSON.parse(readFileSync(runtimeFile, 'utf8'))
+  // 模拟旧版主进程：/v1/chat/changes 返回 404，其余请求转发到真实服务
+  const { createServer, request } = await import('node:http')
+  const proxy = createServer((req, res) => {
+    if (req.url?.startsWith('/v1/chat/changes')) {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: '接口不存在' }))
+      return
+    }
+    const upstream = request(
+      { host: '127.0.0.1', port, path: req.url, method: req.method, headers: req.headers },
+      (response) => {
+        res.writeHead(response.statusCode ?? 500, response.headers)
+        response.pipe(res)
+      }
+    )
+    req.pipe(upstream)
+  })
+  await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', () => resolve()))
+  const legacy = path.join(root, 'legacy-runtime.json')
+  writeFileSync(legacy, JSON.stringify({ port: (proxy.address() as { port: number }).port, token }))
+  try {
+    chat.createChannel({ id: 'control', members: ['main', 'w/claude'] })
+    const run = launch(legacy, [
+      'wait',
+      '--terminal',
+      'claude',
+      '--member',
+      'w/claude',
+      '--timeout-seconds',
+      '20',
+      '--poll-ms',
+      '100'
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(run.lines).toEqual([])
+    const started = Date.now()
+    const task = chat.post({ channel: 'control', from: 'main', to: 'w/claude', body: 'legacy' })
+    expect(await run.exited).toBe(0)
+    expect(Date.now() - started).toBeLessThan(3000)
+    expect(run.lines[0].tasks.map((t: { id: string }) => t.id)).toEqual([task.id])
+  } finally {
+    proxy.closeAllConnections()
+    await new Promise<void>((resolve) => proxy.close(() => resolve()))
+    await server.close()
+  }
+}, 30000)

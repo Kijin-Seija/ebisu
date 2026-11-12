@@ -20,6 +20,12 @@ Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；�
   send    --channel <id> --to <member> [--type task] (--body t | --body-file <file|->) [--image <png|jpg|gif|webp>]...
                                            发起一条定向消息（派单、审核意见等）
   inbox   [--stale-minutes 240]            待本参与者处理的消息：发给我、我尚未回复、且没有未过期的认领
+  wait    [--timeout-seconds N] [--new-only] 阻塞到 inbox 的 tasks 非空（--new-only：出现启动时没有的新消息 id）
+                                           立即输出与 inbox 相同的单行 JSON 并退出 0；超时输出 {"ok":true,"timeout":true}；
+                                           不传 --timeout-seconds 则一直等待
+  watch                                    常驻：每出现一条新的待处理消息（按 id 去重，启动时已有的先各输出一次）输出一行
+                                           {channel,id,from,type,createdAt,body(截断 200 字)}，不退出；
+                                           与 Ebisu 断开时输出一行 ok:false 并以非零退出，调用方重新挂起即可
   claim   --channel <id> --id <messageId> [--session <sessionId>]
                                            认领一条消息并绑定处理会话；返回 won=false 表示已被本参与者的其他会话抢先认领
   progress --channel <id> --id <messageId> (--body t | --body-file -) [--image <file>]...
@@ -31,6 +37,9 @@ Usage: chat --terminal <terminal> <command> [options]     (输出单行 JSON；�
   binding --channel <id>                   本参与者在该频道最近绑定的会话
   delete  --channel <id>                   删除频道及全部消息；本机与其他持有副本的设备都会删除
 认领、进展和完成标记都通过 replyTo 指向原消息；inbox 只依据对话内容计算，可在任意会话重复调用。
+wait / watch 只是“叫醒信号”，不认领、不回复、不推进任何游标；收到后仍按 inbox → claim → reply 处理。
+  有变更时由 Ebisu 主进程立即推送（/v1/chat/changes 长轮询）；主进程为旧版本时自动改为每 1.5 秒查询一次本机 inbox。
+  认领超时（--stale-minutes）属于时间触发，最迟 60 秒内被发现。
 身份继承：progress / reply / done 未显式传 --member 时，若原消息发给本设备上的另一参与者且已被其认领，
   自动以该认领者身份发出（处理会话与轮询会话的 --terminal 不一致时也能回到同一参与者）；输出带 member 字段。
 图片：--image 可重复，每条消息最多 4 张，仅 PNG/JPEG/GIF/WebP（按文件内容识别），单张不超过 4 MiB；
@@ -157,7 +166,7 @@ async function member(options, runtime) {
     '-'
   )
 }
-function api(runtime, method, route, data) {
+function api(runtime, method, route, data, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const payload = data === undefined ? undefined : JSON.stringify(data)
     const req = http.request(
@@ -171,7 +180,7 @@ function api(runtime, method, route, data) {
           'Content-Type': 'application/json',
           ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
         },
-        timeout: 15000
+        timeout: timeoutMs
       },
       (response) => {
         const chunks = []
@@ -181,12 +190,17 @@ function api(runtime, method, route, data) {
           try {
             parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
           } catch {
-            return reject(new Error(`http-${response.statusCode}`))
+            return reject(
+              Object.assign(new Error(`http-${response.statusCode}`), {
+                status: response.statusCode
+              })
+            )
           }
           if (response.statusCode !== 200)
             return reject(
               Object.assign(new Error(parsed.error || `http-${response.statusCode}`), {
-                extra: parsed.details
+                extra: parsed.details,
+                status: response.statusCode
               })
             )
           resolve(parsed)
@@ -262,6 +276,138 @@ function bindingOf(messages, me) {
   return latest ? { session: parseSession(latest), since: latest.createdAt } : null
 }
 
+const staleOf = (options) => Number(options['stale-minutes'] ?? 240) * 60000
+/**
+ * 计算参与者的待处理视图：tasks 为发给我、我尚未回复且没有未过期认领的消息；
+ * inProgress 为已被我某个会话认领且认领未过期的消息。只读，不写入任何状态。
+ */
+async function inbox(runtime, me, staleMs) {
+  const now = Date.now()
+  const { channels } = await api(runtime, 'GET', '/v1/chat/channels')
+  const tasks = []
+  const inProgress = []
+  for (const channel of channels.filter((c) => c.members.includes(me))) {
+    const messages = await history(runtime, channel.id)
+    const binding = bindingOf(messages, me)
+    for (const message of messages) {
+      if (message.to !== me || message.from === me || MARKERS.has(message.type)) continue
+      const state = stateOf(messages, me, message.id, staleMs, now)
+      if (state.handled) continue
+      const item = {
+        channel: channel.id,
+        title: channel.title,
+        id: message.id,
+        from: message.from,
+        type: message.type,
+        body: message.body,
+        ...(message.attachments ? { attachments: message.attachments } : {}),
+        createdAt: message.createdAt,
+        binding
+      }
+      if (state.claim && !state.stale) inProgress.push({ ...item, claim: state.claim })
+      else tasks.push(state.claim ? { ...item, staleClaim: state.claim } : item)
+    }
+  }
+  return { ok: true, member: me, tasks, inProgress }
+}
+
+/** 主进程没有变更事件时（旧版本），每隔多久重新计算一次本机 inbox。 */
+const POLL_MS = 1500
+/** 即使没有变更事件也定期重算，覆盖认领超时这类只随时间变化的状态。 */
+const RECHECK_MS = 60000
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+/**
+ * 对话变更信号。优先使用主进程 /v1/chat/changes 长轮询（有变更立即返回）；
+ * 接口返回 404（主进程为旧版本）时退化为固定间隔，本地调用不消耗模型 token。
+ * next(maxMs) 在“可能有变更”或 maxMs 到期时返回，调用方随后重算 inbox。
+ */
+function changeFeed(runtime, options) {
+  let revision = -1
+  let push = true
+  const pollMs = Number(options['poll-ms'] ?? POLL_MS)
+  return {
+    async next(maxMs) {
+      if (push) {
+        try {
+          const query = new URLSearchParams({
+            after: String(revision),
+            timeout: String(Math.max(0, maxMs) / 1000)
+          })
+          // HTTP 超时需长于服务端等待时间，留出余量。
+          const result = await api(
+            runtime,
+            'GET',
+            `/v1/chat/changes?${query}`,
+            undefined,
+            maxMs + 15000
+          )
+          revision = result.revision
+          return
+        } catch (error) {
+          if (error.status !== 404) throw error
+          push = false
+          return
+        }
+      }
+      await sleep(Math.max(0, Math.min(pollMs, maxMs)))
+    }
+  }
+}
+
+/** wait：tasks 非空（或 --new-only 时出现启动时没有的消息 id）即返回 inbox 结果，超时返回 timeout:true。 */
+async function waitFor(runtime, me, options) {
+  const staleMs = staleOf(options)
+  const seconds = options['timeout-seconds']
+  const deadline =
+    seconds === undefined || seconds === true ? Infinity : Date.now() + Number(seconds) * 1000
+  if (Number.isNaN(deadline)) fail('invalid --timeout-seconds')
+  const feed = changeFeed(runtime, options)
+  // 先取当前版本号，再计算 inbox：两者之间发生的变更会让下一次 next 立即返回，不会漏掉。
+  await feed.next(0)
+  let baseline = null
+  for (;;) {
+    const view = await inbox(runtime, me, staleMs)
+    if (options['new-only']) {
+      if (!baseline) baseline = new Set(view.tasks.map((t) => t.id))
+      else if (view.tasks.some((t) => !baseline.has(t.id))) return view
+    } else if (view.tasks.length) return view
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return { ok: true, timeout: true }
+    await feed.next(Math.min(remaining, RECHECK_MS))
+  }
+}
+
+/** 正文截断到 200 个字符（按 Unicode 码点，避免截断代理对）。 */
+function brief(text, limit = 200) {
+  const chars = Array.from(String(text ?? ''))
+  return chars.length > limit ? `${chars.slice(0, limit).join('')}…` : chars.join('')
+}
+
+/** watch：常驻输出新的待处理消息，每条消息 id 只输出一次；出错时抛出由入口处理。 */
+async function watch(runtime, me, options) {
+  const staleMs = staleOf(options)
+  const feed = changeFeed(runtime, options)
+  const seen = new Set()
+  await feed.next(0)
+  for (;;) {
+    const view = await inbox(runtime, me, staleMs)
+    for (const task of view.tasks) {
+      if (seen.has(task.id)) continue
+      seen.add(task.id)
+      const line = {
+        channel: task.channel,
+        id: task.id,
+        from: task.from,
+        type: task.type,
+        createdAt: task.createdAt,
+        body: brief(task.body)
+      }
+      process.stdout.write(`${JSON.stringify(line)}\n`)
+    }
+    await feed.next(RECHECK_MS)
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   const options = args(argv)
@@ -320,37 +466,16 @@ async function main() {
       })
       break
     }
-    case 'inbox': {
-      const staleMs = Number(options['stale-minutes'] ?? 240) * 60000
-      const now = Date.now()
-      const { channels } = await api(runtime, 'GET', '/v1/chat/channels')
-      const tasks = []
-      const inProgress = []
-      for (const channel of channels.filter((c) => c.members.includes(me))) {
-        const messages = await history(runtime, channel.id)
-        const binding = bindingOf(messages, me)
-        for (const message of messages) {
-          if (message.to !== me || message.from === me || MARKERS.has(message.type)) continue
-          const state = stateOf(messages, me, message.id, staleMs, now)
-          if (state.handled) continue
-          const item = {
-            channel: channel.id,
-            title: channel.title,
-            id: message.id,
-            from: message.from,
-            type: message.type,
-            body: message.body,
-            ...(message.attachments ? { attachments: message.attachments } : {}),
-            createdAt: message.createdAt,
-            binding
-          }
-          if (state.claim && !state.stale) inProgress.push({ ...item, claim: state.claim })
-          else tasks.push(state.claim ? { ...item, staleClaim: state.claim } : item)
-        }
-      }
-      result = { ok: true, member: me, tasks, inProgress }
+    case 'inbox':
+      result = await inbox(runtime, me, staleOf(options))
       break
-    }
+    case 'wait':
+      result = await waitFor(runtime, me, options)
+      break
+    case 'watch':
+      // watch 不会正常返回；断开或出错时抛出，由入口输出 ok:false 并以非零退出。
+      await watch(runtime, me, options)
+      return
     case 'claim': {
       const channel = need(options, 'channel')
       const id = need(options, 'id')
@@ -447,4 +572,4 @@ if (require.main === module)
     )
     process.exitCode = 1
   })
-module.exports = { stateOf, bindingOf, senderFor }
+module.exports = { stateOf, bindingOf, senderFor, brief }
