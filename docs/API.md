@@ -156,8 +156,11 @@ preload 新增设备配置、请求配对/确认或拒绝请求、解除配对�
 | `GET /v1/chat/messages`         | `?channel=&since=&limit=` 读取历史                                                                                 |
 | `GET /v1/chat/wait`             | `?member=&channel=a,b 或 *&timeout=秒(≤900)&all=1&peek=1` 长轮询                                                   |
 | `POST /v1/chat/ack`             | `{ member, messages:[{channel,seq}] }` 推进游标（配合 `peek` 使用）                                                |
+| `GET /v1/chat/changes`          | `?after=版本号(首次 -1)&timeout=秒(≤900)` 变更信号长轮询，返回 `{ revision, changed }`                             |
 
 `wait` 返回该参与者游标之后、非自己发出、且 `to` 为空或等于自己的消息（`all=1` 时不按 `to` 过滤）；有消息立即返回，否则等到新消息或超时（`timeout: true`）。默认返回即推进游标，`peek=1` 不推进。显式等待某频道即加入该频道，`channel=*` 表示已加入的全部频道。游标保存在本机，按参与者名称区分，会话重启后沿用。
+
+`changes` 不读取消息、不推进游标：本机对话每次变更（发消息、对端同步写入、删除频道、图片落盘）版本号加一，`after` 与当前版本号不同时立即返回，否则等到下一次变更或超时（`changed: false`）。版本号只在进程内递增，主进程重启后从 0 开始，调用方只需判断是否不同。chat 客户端的 `wait`/`watch` 用它在变更时立即重算 inbox；主进程为旧版本（404）时客户端退化为每 1.5 秒查询一次。
 
 ### 命令行
 
@@ -175,7 +178,7 @@ report --terminal qoder --chat history --channel bug/STRATEGY-4287
 
 `--member` 默认为 `Ebisu 设备名/终端`（例如 `almondeMac22-Mini/qoder`）；设备名即配对时双方看到的稳定名称，读取失败时才回退到 `短主机名/终端`，避免 macOS hostname 随网络变化导致身份漂移。`wait` 的 `--timeout` 应小于所在终端单条命令的超时上限。`report --chat` 提供 `devices`、`metrics`、`channels`、`create`、`post`、`wait`、`history` 和 `ack`。
 
-绑定终端后，数据目录下的 `.ebisu/tools/chat` 客户端提供面向 agent 工作流的高层命令：`whoami`、`devices`、`metrics`、`channels`、`create`、`send`、`inbox`、`claim`、`progress`、`reply`、`done`、`history`、`binding`、`delete`，`send`/`progress`/`reply` 支持可重复的 `--image`。认领、进展与完成都以 `replyTo` 记录在对话中，`inbox` 只依据对话内容计算；`progress`/`reply`/`done` 未传 `--member` 时会沿用本设备上已认领该消息的参与者。运行 `chat protocol` 查看完整说明，轮询与派发流程见管理技能 `ebisu-chat`。
+绑定终端后，数据目录下的 `.ebisu/tools/chat` 客户端提供面向 agent 工作流的高层命令：`whoami`、`devices`、`metrics`、`channels`、`create`、`send`、`inbox`、`wait`、`watch`、`claim`、`progress`、`reply`、`done`、`history`、`binding`、`delete`，`send`/`progress`/`reply` 支持可重复的 `--image`。认领、进展与完成都以 `replyTo` 记录在对话中，`inbox` 只依据对话内容计算；`progress`/`reply`/`done` 未传 `--member` 时会沿用本设备上已认领该消息的参与者。运行 `chat protocol` 查看完整说明，轮询与派发流程见管理技能 `ebisu-chat`。
 
 界面“聊天室”页面以对话流展示频道内容与图片缩略图，可删除频道。
 

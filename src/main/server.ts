@@ -193,6 +193,7 @@ async function readBody(request: IncomingMessage, limit: number): Promise<unknow
 /**
  * Agent 对话本机接口。agent 只访问本机 Ebisu，跨设备复制由 LAN 层完成。
  * wait 为长轮询：客户端断开时立即释放等待者。
+ * changes 为纯变更信号长轮询（只返回版本号），供 chat 客户端 wait/watch 命令在有变更时立即重算 inbox。
  */
 async function chatRoute(
   chat: Chat,
@@ -270,6 +271,21 @@ async function chatRoute(
       })
       if (!response.destroyed)
         send(response, 200, { ok: true, timeout: !messages.length, messages })
+      return
+    }
+    case 'GET /v1/chat/changes': {
+      // ?after=上次拿到的版本号（首次传 -1 立即返回当前版本）&timeout=秒(≤900)
+      const controller = new AbortController()
+      response.once('close', () => controller.abort())
+      const after = z.coerce.number().int().default(-1).parse(query('after'))
+      const timeout = z.coerce
+        .number()
+        .min(0)
+        .max(MAX_WAIT_SECONDS)
+        .default(240)
+        .parse(query('timeout'))
+      const result = await chat.changes({ after, timeout, signal: controller.signal })
+      if (!response.destroyed) send(response, 200, { ok: true, ...result })
       return
     }
     case 'POST /v1/chat/ack': {

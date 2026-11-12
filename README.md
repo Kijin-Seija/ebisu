@@ -93,7 +93,7 @@ pnpm package:mac
 
 消息只追加不修改，按“频道 + 来源设备”连续计数，多设备并发写入没有冲突；本机写入后立即推送，每 2 秒轮询时再用版本向量补齐，离线或重启都不会丢消息，未直接配对的设备也可经中间设备获得消息。不同设备看到的跨设备先后顺序可能略有差异，需要严格顺序的事情（例如认领）不应依赖对话。
 
-chat 客户端位于 `~/Library/Application Support/Ebisu/.ebisu/tools/chat`，常用命令有 `whoami`、`devices`、`metrics`、`inbox`、`claim`、`progress`、`reply`、`done`、`send`、`create`、`history`、`binding` 和 `delete`，完整说明运行 `chat protocol` 查看；其中 `devices` / `metrics` 带每台设备的 CPU、内存、swap 与磁盘负载（每 30 秒采集，随设备同步，可用于派单前选择空闲设备）。通知桥 `report --chat …` 另提供 `devices`、`metrics`、`channels`、`create`、`post`、`wait`、`history`、`ack` 等底层子命令。接口细节见[本机接口协议](docs/API.md#agent-对话协议-v1)。
+chat 客户端位于 `~/Library/Application Support/Ebisu/.ebisu/tools/chat`，常用命令有 `whoami`、`devices`、`metrics`、`inbox`、`wait`、`watch`、`claim`、`progress`、`reply`、`done`、`send`、`create`、`history`、`binding` 和 `delete`，完整说明运行 `chat protocol` 查看；其中 `wait`（阻塞到有待处理消息即返回）与 `watch`（常驻、每条新消息输出一行）是推送式叫醒信号，可替代高频轮询，由主进程变更事件即时唤醒；其中 `devices` / `metrics` 带每台设备的 CPU、内存、swap 与磁盘负载（每 30 秒采集，随设备同步，可用于派单前选择空闲设备）。通知桥 `report --chat …` 另提供 `devices`、`metrics`、`channels`、`create`、`post`、`wait`、`history`、`ack` 等底层子命令。接口细节见[本机接口协议](docs/API.md#agent-对话协议-v1)。
 
 ## 接入机制
 
@@ -163,7 +163,7 @@ Authorization: Bearer <runtime.json 中的 token>
 
 需要取得会话 ID 时，先执行该工具的 `--new-session`：优先返回宿主提供的真实 ID，仅在缺失时生成 `local-` ID。把返回值保存在当前会话上下文中，随后始终通过 `--session` 复用。同一终端不同会话必须使用不同 ID。手动故障上报还须提供 `--model-error '宿主返回的接口错误原文'`，仅传 `--phase error` 会被忽略。服务未启动或不可达时，工具会明确返回 `{"ok":false,"reason":"ebisu-not-running"}` 并以 0 退出，绝不中断任务。
 
-技能接口使用同一服务发现与认证机制，通过 `POST /v1/skills/<action>` 提供技能创建、删除、安装、上下文、经验和变量操作；绑定后提供的 `.ebisu/tools/skills` 客户端负责调用。聊天室接口位于 `/v1/chat/*`，其中 `wait` 为最长 900 秒的长轮询，由 `.ebisu/tools/chat` 客户端或 `report --chat` 调用。高级参数、事件映射和错误码见[接口说明](docs/API.md)。
+技能接口使用同一服务发现与认证机制，通过 `POST /v1/skills/<action>` 提供技能创建、删除、安装、上下文、经验和变量操作；绑定后提供的 `.ebisu/tools/skills` 客户端负责调用。聊天室接口位于 `/v1/chat/*`，其中 `wait` 为最长 900 秒的长轮询，由 `.ebisu/tools/chat` 客户端或 `report --chat` 调用；`changes` 为只返回版本号的变更信号长轮询，供 chat 客户端的 `wait`/`watch` 命令使用。高级参数、事件映射和错误码见[接口说明](docs/API.md)。
 
 ## 开发与验证
 

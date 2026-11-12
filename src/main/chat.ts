@@ -266,6 +266,13 @@ export class Chat {
   private readonly now: () => number
   private readonly changed: () => void
   private readonly waiters = new Set<() => void>()
+  /**
+   * 对话变更版本号：每次 notify（本机发消息、对端同步写入、删除频道、图片落盘等）加一。
+   * 只在进程内单调递增、重启后从 0 开始，供 changes() 长轮询判断“是否有新变更”，不持久化。
+   */
+  private revision = 0
+  /** close 后 changes() 不再挂起等待，避免关闭阶段的长轮询拖到超时。 */
+  private closed = false
   private push?: Options['push']
   private directory: ChatDirectory
   private readonly idleMs: number
@@ -647,6 +654,34 @@ export class Chat {
     }
   }
 
+  /**
+   * 变更订阅（长轮询）：当前版本号与调用方已知的 after 不同即立即返回（含主进程重启后版本号回退），
+   * 否则等到下一次变更、超时或中止。只返回版本号，不读取、不推进任何游标，调用方自行重新计算 inbox。
+   */
+  async changes(input: { after: number; timeout: number; signal?: AbortSignal }): Promise<{
+    revision: number
+    changed: boolean
+  }> {
+    const deadline = this.now() + Math.min(Math.max(input.timeout, 0), MAX_WAIT_SECONDS) * 1000
+    for (;;) {
+      if (this.revision !== input.after) return { revision: this.revision, changed: true }
+      const remaining = deadline - this.now()
+      if (remaining <= 0 || input.signal?.aborted || this.closed)
+        return { revision: this.revision, changed: false }
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer)
+          this.waiters.delete(done)
+          input.signal?.removeEventListener('abort', done)
+          resolve()
+        }
+        const timer = setTimeout(done, remaining)
+        this.waiters.add(done)
+        input.signal?.addEventListener('abort', done)
+      })
+    }
+  }
+
   /** 推进参与者在各频道的游标，只前进不后退。 */
   ack(member: string, messages: Pick<ChatMessage, 'channel' | 'seq'>[]): void {
     memberSchema.parse(member)
@@ -758,6 +793,7 @@ export class Chat {
 
   /** 关闭时停止自动清理并唤醒所有长轮询，避免请求挂到超时。 */
   close(): void {
+    this.closed = true
     this.stopCleanup()
     for (const waiter of [...this.waiters]) waiter()
   }
@@ -1173,6 +1209,7 @@ export class Chat {
   }
 
   private notify(): void {
+    this.revision++
     this.changed()
     for (const waiter of [...this.waiters]) waiter()
   }

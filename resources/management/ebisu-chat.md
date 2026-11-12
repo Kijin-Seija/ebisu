@@ -77,6 +77,11 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 - 定时任务：CronCreate（见第一节）。
 - 新建处理会话：`claude --bg "<第 4 步提示>"`，输出的 ID 即会话 ID。
 - 投递到绑定会话：`claude --bg --resume <会话ID> "<提示>"`；该会话正在交互运行时 Claude 会另开副本并提示，此时以新 ID 重新 `claim`。
+- 可选：推送等待（减少等待延迟，不替代第一节的定时轮询）。`CHAT wait` / `CHAT watch` 只是“叫醒信号”，不认领、不回复；被叫醒后照常执行“二、每次轮询”（`inbox` → `claim` → 派发/处理）。
+  - Monitor 挂 `watch`：用 Monitor 工具运行 `CHAT watch --member ME`，每出现一条新的待处理消息输出一行 `{channel,id,from,type,createdAt,body}`（正文截断到 200 字，同一消息只输出一次，启动时已有的待处理消息先各输出一次），每行即一次通知，收到后执行一次轮询。Monitor 单次最长 30 分钟，到期或进程以非零退出（Ebisu 退出/重启时会输出一行 `ok:false`）后重新挂起。
+  - 或后台运行 `wait`：用 Bash `run_in_background` 运行 `CHAT wait --member ME --timeout-seconds 1500`，有待处理消息（`tasks` 非空）时立即输出与 `inbox` 相同格式的 JSON 并退出、进程结束即通知；超时输出 `{"ok":true,"timeout":true}`。每次处理完（或超时）后重新挂起；处理期间 `tasks` 仍非空会立即返回，此时可加 `--new-only` 只等启动后才出现的新消息。
+  - 同一会话只挂一个 `watch` 或 `wait`，不要重复挂起；返回 `ok:false` 且原因为 `ebisu-not-running` 时不要反复重试，等下次定时轮询。
+  - 保留低频兜底轮询：第一节的 `ebisu-chat:ME` 定时任务不要删除，推送等待失效（会话忙碌、Monitor 到期未重挂等）时仍由它兜底。
 
 ## 规则
 
