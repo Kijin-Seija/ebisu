@@ -4,17 +4,20 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 
 先运行 `CHAT whoami` 取得你的参与者名称（下文记作 `ME`），运行 `CHAT protocol` 查看完整命令。
 
-## 一、调用本技能时：注册轮询定时任务（只做一次）
+## 一、调用本技能时：注册推送等待与兜底定时任务（只做一次）
+
+收消息以**推送等待为主、定时任务兜底**。`CHAT wait` / `CHAT watch` 在有发给 `ME` 的新消息时立即返回或输出一行，只是“叫醒信号”，不认领、不回复；被叫醒后照常执行“二、每次轮询”（`inbox` → `claim` → 派发/处理）。
 
 1. 在本终端内置的定时任务功能中查找名为 `ebisu-chat:ME` 的任务（Claude Code 使用 CronList 查看 prompt 以 `[ebisu-chat:ME]` 开头的任务）。**已存在则不要重复创建**，直接告诉用户已在运行及下次触发时间。
-2. 不存在则创建一个循环定时任务：
-   - 名称：`ebisu-chat:ME`；间隔：每 5 分钟（终端最小间隔更大时取最小值）。
-   - 任务内容（prompt）原样写为：
-     `[ebisu-chat:ME] 执行一次 ebisu-chat 轮询：按 ebisu-chat 技能“二、每次轮询”的步骤处理。没有待处理消息时只回复“无新消息”。`
-   - Claude Code：用 CronCreate，cron `*/5 * * * *`，recurring=true。它只在当前会话存活且空闲时触发，7 天后自动过期；创建后告诉用户这两点，过期后再次调用本技能即可重建。
-   - Qoder、DeepSeek Harness 等：使用终端内置的定时任务功能创建；即使定时任务每次触发都会新开会话，该会话也只做轮询与派发，任务仍交给新建或已绑定的处理会话。
-   - 需要停止轮询时（例如主控通知会话轮换），删除本终端的 `ebisu-chat:ME` 定时任务。
-3. 立即执行一次“二、每次轮询”，确认客户端可用，并把 `ME` 告诉用户（主控需要用它给你派单）。
+2. 按终端能力选一档（具体做法见“三、各终端的具体做法”）：
+   - **A 档：终端能被后台命令的输出或结束唤醒**（Claude Code 的 Monitor 或 `run_in_background`）。挂起 `CHAT watch --member ME`（或后台 `CHAT wait --member ME --new-only`），每次被叫醒执行一次“二、每次轮询”。兜底定时任务每 30 分钟一次，内容是“执行一次轮询，并确认推送等待仍在挂起，没有就重新挂起”。
+   - **B 档：终端只能靠定时任务触发**（Qoder、Qoder CN、DeepSeek Harness 等）。定时任务每 5 分钟一次；每次触发时先执行一次“二、每次轮询”，然后在本轮内阻塞运行 `CHAT wait --member ME --new-only --timeout-seconds T`（T 不超过终端单条命令的时限，不确定时用 240），有新消息返回就立即再执行一次“二、每次轮询”并继续等待，直到本轮已用时间接近定时间隔再结束。等待期间不产生模型输出，消息延迟降到秒级。
+3. 定时任务的内容（prompt）原样写为：
+   `[ebisu-chat:ME] 执行一次 ebisu-chat 轮询：按 ebisu-chat 技能“一、2”的本终端档位与“二、每次轮询”处理。没有待处理消息时只回复“无新消息”。`
+   - Claude Code：CronCreate，cron `*/30 * * * *`，recurring=true；同时用 Monitor 挂 `watch`。定时任务只在当前会话存活且空闲时触发，7 天后自动过期；创建后告诉用户这两点，过期后再次调用本技能即可重建。
+   - Qoder、DeepSeek Harness 等：使用终端内置的定时任务功能，间隔 5 分钟；即使定时任务每次触发都会新开会话，该会话也只做轮询、等待与派发，任务仍交给新建或已绑定的处理会话。
+   - 需要停止时（例如主控通知会话轮换），删除本终端的 `ebisu-chat:ME` 定时任务，并停止挂起的 `watch`/`wait`。
+4. 立即执行一次“二、每次轮询”，确认客户端可用（`CHAT protocol` 应列出 `wait` 与 `watch`；没有说明本机 Ebisu 未更新，先按 B 档的定时任务、去掉 `wait` 运行），并把 `ME` 告诉用户（主控需要用它给你派单）。
 
 用户说明本会话是“主控”（或以 `controller` 参数调用）时，额外记住：**主控在当前会话内直接处理所有消息**，不新建、不转发会话。
 
@@ -57,14 +60,14 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 
 ### Qoder
 
-- 定时任务：`qoder_cron`（先 `list` 查找同名任务），间隔 300000 ms，`outputMode` 用 `merged`（每次触发复用同一个轮询会话；`independent` 会每次新开轮询会话，不推荐）。
+- 定时任务：`qoder_cron`（先 `list` 查找同名任务），间隔 300000 ms，`outputMode` 用 `merged`（每次触发复用同一个轮询会话；`independent` 会每次新开轮询会话，不推荐）。按 B 档在本轮内运行 `CHAT wait`；若终端运行命令有时长上限，`--timeout-seconds` 取上限以下。
 - 新建处理会话：内置工具 `create_chat_session`（`mcp__builtin__create_chat_session`），入参 `prompt` 为第 4 步提示；返回 `{ sessionId }` 即新会话 ID，用它 `claim`。
 - 投递到绑定会话：`send_message_to_chat_session`（`mcp__builtin__send_message_to_chat_session`），入参 `{ sessionId, prompt }`。目标必须是本机未归档的会话且不能是轮询会话自身；投递失败（会话已归档/不存在）时按“绑定会话不可用”新建会话。
 - 成功只表示已派发，不代表完成；轮询会话不要等待处理结果。
 
 ### DeepSeek Harness（dsh）
 
-- 定时任务：`schedule_create`，`every_seconds: 300`（最小 60）。提醒投递回创建它的会话，因此轮询始终在同一会话中运行。
+- 定时任务：`schedule_create`，`every_seconds: 300`（最小 60）。提醒投递回创建它的会话，因此轮询始终在同一会话中运行。按 B 档在本轮内运行 `CHAT wait`（这是下一条“不运行长命令”的唯一例外）。
 - **轮询会话是纯路由**：只做 `inbox`、`claim`、`subagent`/`send_message`（以及必要的 `reply/done`），不在轮询会话内处理任务内容、不运行长命令、不做状态轮询、不等待处理结果、不使用 `ask_user_question`。需要人决策时，由处理会话按第 3 步用 `reply --type result --member ME` 向原发送者（通常是主控）提问；轮询会话结束本轮。
 - 子会话里 `CHAT whoami` 可能得到 `主机/agent`（子会话不继承轮询会话的 `--terminal`），所以第 4 步提示里的每条 chat 命令都必须带 `--member ME`。
 - **一个终端（ME）只保留一个轮询会话和一个 `ebisu-chat:ME` 定时任务**：DSH 的 `schedule_list` 只列当前会话，发现不了其他会话注册的同名任务；重复注册会出现两个 poller 抢消息、互相覆盖频道绑定。切换轮询会话前先删除旧定时任务。
@@ -74,14 +77,13 @@ Ebisu 在已配对设备之间同步“频道”消息。每个终端以参与�
 
 ### Claude Code（worker 时）
 
-- 定时任务：CronCreate（见第一节）。
+- 定时任务与推送：A 档（见第一节）。
 - 新建处理会话：`claude --bg "<第 4 步提示>"`，输出的 ID 即会话 ID。
 - 投递到绑定会话：`claude --bg --resume <会话ID> "<提示>"`；该会话正在交互运行时 Claude 会另开副本并提示，此时以新 ID 重新 `claim`。
-- 可选：推送等待（减少等待延迟，不替代第一节的定时轮询）。`CHAT wait` / `CHAT watch` 只是“叫醒信号”，不认领、不回复；被叫醒后照常执行“二、每次轮询”（`inbox` → `claim` → 派发/处理）。
-  - Monitor 挂 `watch`：用 Monitor 工具运行 `CHAT watch --member ME`，每出现一条新的待处理消息输出一行 `{channel,id,from,type,createdAt,body}`（正文截断到 200 字，同一消息只输出一次，启动时已有的待处理消息先各输出一次），每行即一次通知，收到后执行一次轮询。Monitor 单次最长 30 分钟，到期或进程以非零退出（Ebisu 退出/重启时会输出一行 `ok:false`）后重新挂起。
-  - 或后台运行 `wait`：用 Bash `run_in_background` 运行 `CHAT wait --member ME --timeout-seconds 1500`，有待处理消息（`tasks` 非空）时立即输出与 `inbox` 相同格式的 JSON 并退出、进程结束即通知；超时输出 `{"ok":true,"timeout":true}`。每次处理完（或超时）后重新挂起；处理期间 `tasks` 仍非空会立即返回，此时可加 `--new-only` 只等启动后才出现的新消息。
-  - 同一会话只挂一个 `watch` 或 `wait`，不要重复挂起；返回 `ok:false` 且原因为 `ebisu-not-running` 时不要反复重试，等下次定时轮询。
-  - 保留低频兜底轮询：第一节的 `ebisu-chat:ME` 定时任务不要删除，推送等待失效（会话忙碌、Monitor 到期未重挂等）时仍由它兜底。
+- 推送等待（A 档）：
+  - 用 Monitor 工具运行 `CHAT watch --member ME`：每出现一条新的待处理消息输出一行 `{channel,id,from,type,createdAt,body}`（正文截断到 200 字，同一消息只输出一次，启动时已有的待处理消息先各输出一次），每行即一次通知，收到后执行一次轮询。Monitor 单次最长 30 分钟，到期或进程以非零退出（Ebisu 退出/重启时会输出一行 `ok:false`）后重新挂起。
+  - 或用 Bash `run_in_background` 运行 `CHAT wait --member ME --new-only --timeout-seconds 1500`：有新消息时输出与 `inbox` 相同格式的 JSON 并退出，进程结束即通知；超时输出 `{"ok":true,"timeout":true}`。每次处理完（或超时）后重新挂起。
+  - 同一会话只挂一个 `watch` 或 `wait`；返回 `ok:false` 且原因为 `ebisu-not-running` 时不要反复重试，等兜底定时任务。
 
 ## 规则
 
